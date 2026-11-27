@@ -1,0 +1,6 @@
+# Netlify build settings. Secrets and connection strings are set in the Netlify UI, never here.
+[build]
+  command = "npm run tokens:check && npm run build"
+
+[build.environment]
+  NODE_VERSION = "22"
