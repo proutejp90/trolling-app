@@ -51,9 +51,9 @@ export const rules: Rule[] = [
     ["science"], research("Location")),
 
   // Depth
-  rule("R05", "depth", 30, f("temp_source_level", "in", [0, 1]),
+  rule("R05", "depth", 30, f("has_temp_data", "eq", true),
     { depth_from: "temp_band_entry_or_break", extend_below_ft: 20 },
-    ["science", "lore"], research("Depth") + ". Level 0 is the angler's own probe reading."),
+    ["science", "lore"], research("Depth") + ". Fires whenever a profile or a break depth is known: a buoy, a report, or the angler's own reading."),
   rule("R06", "depth", 10, { all: [f("has_temp_data", "eq", false), f("month", "eq", 7)] },
     { depth_ft: { min: 25, max: 70 } },
     ["reports"], "Michigan DNR weekly reports, July"),
@@ -62,7 +62,7 @@ export const rules: Rule[] = [
     ["reports"], "Michigan DNR weekly reports, August"),
   rule("R08", "depth", 20, { all: [f("shore", "eq", "east"), f("upwelling_likely", "eq", true)] },
     { shift_shallower_by_threshold: "upwelling_shift_ft", note: "Fish may be closer to the pier." },
-    ["science"], research("Upwelling") + ". Skipped while upwelling_shift_ft has no value."),
+    ["science"], research("Upwelling") + "; docs/research/upwelling-shift.md"),
 
   // Color. Lure depth is the midpoint of the depth range.
   rule("R09", "color", 10, th("lure_depth_ft", "lt", "red_max_ft"),
@@ -111,7 +111,7 @@ export const rules: Rule[] = [
     { rank_first: ["flasher_fly"], keep_lines: { spoon: 1 } },
     ["lore"], "Forum posters on both lakes", { lakes: ["michigan", "ontario"] }),
   rule("P03", "presentation", 100, th("lure_depth_ft", "gt", "spoon_exclude_min_ft"),
-    { allow_only: ["flasher_fly", "meat_rig"], exclude: ["spoon"] },
+    { rank_first: ["flasher_fly"], allow_only: ["flasher_fly", "meat_rig"], exclude: ["spoon"] },
     ["lore"], "Lake Michigan angler and fly maker"),
   rule("P04", "presentation", 80, f("light_period", "in", ["before_sunrise", "after_sunset"]),
     { rank_first: ["spoon"], require_finishes: ["glow"], add_from_month: { month: 7, lure_type: "plug", lines: 1, require_finishes: ["glow"] } },
