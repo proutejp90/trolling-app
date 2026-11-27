@@ -2,8 +2,12 @@
   "name": "conditions-recommender",
   "version": "0.0.0",
   "private": true,
-  "workspaces": ["packages/*"],
-  "engines": { "node": ">=20" },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "setup": "npm install && npm run tokens && npm run db:migrate && npm run db:seed && npm run build",
     "dev": "next dev",
@@ -14,6 +18,7 @@
     "lint": "eslint . && node scripts/lint-design.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "playwright test --trace off",
     "db:migrate": "tsx scripts/db.mts migrate",
     "db:seed": "tsx scripts/db.mts seed",
     "db:seed:sql": "tsx scripts/seed-sql.mts",
@@ -28,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",

@@ -20,7 +20,7 @@ export const thresholds: Threshold[] = [
   t("glow_lead_ft", 65, "ft", "Below this lure depth glow ranks first."),
   t("murky_factor", 0.5, "ratio", "Multiplier on color band depths in stained or murky water. No research behind it.", true),
   t("upwelling_wind_hours", 24, "h", "Hours of north or east wind in the last 48 that mark an upwelling. No research behind it.", true),
-  t("upwelling_shift_ft", null, "ft", "How far R08 moves the depth range shallower. Not set; R08 is skipped until the owner gives a value.", true),
+  t("upwelling_shift_ft", 15, "ft", "How far R08 moves the depth range shallower. From six summers of Ludington buoy history; see docs/research/upwelling-shift.md.", true),
   t("warm_water_f", null, "F", "Temperature at the lure that counts as warm for P09. Not set; P09 is skipped until the owner gives a value.", true),
 
   // Speed by lure type (all Lore). Plug ranges live in R17 and R18.
