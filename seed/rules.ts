@@ -1,5 +1,5 @@
 /**
- * Starter rules: R01 to R19 from the spec's Rules engine section and P01 to P12
+ * Starter rules: R01 to R19 from the spec's Rules engine section, R20 added by the owner, and P01 to P12
  * from the Presentation stage. Rules are rows, so the owner edits them in admin
  * without a deploy; this file only seeds a fresh database.
  *
@@ -72,8 +72,8 @@ export const rules: Rule[] = [
     { exclude_colors: ["red", "orange"], unless_finish: ["fluorescent"] },
     ["science"], "Light attenuation; see research doc, Color"),
   rule("R11", "color", 20, { all: [th("lure_depth_ft", "gte", "yellow_max_ft"), th("lure_depth_ft", "lte", "blue_max_ft")] },
-    { allow_colors: ["green", "blue", "silver"], allow_finishes: ["chrome", "glow"] },
-    ["science"], research("Color")),
+    { allow_colors: ["green", "blue", "silver", "chartreuse"], allow_finishes: ["chrome", "glow", "fluorescent"] },
+    ["science"], research("Color") + ". Chartreuse and fluorescent finishes added by the owner, 2026-11-27, so R14's stained-water picks survive at mid depths."),
   rule("R12", "color", 40, { any: [th("lure_depth_ft", "gt", "glow_lead_ft"), f("sky", "in", ["low_light", "overcast"])] },
     { rank_first_finishes: ["glow"] },
     ["science", "reports"], research("Color") + "; Michigan DNR weekly reports"),
@@ -89,6 +89,10 @@ export const rules: Rule[] = [
   rule("R16", "color", 30, f("mode", "eq", "staging"),
     { rank_first_finishes: ["fluorescent", "glow"], prefer_patterns: ["ladderback"] },
     ["lore"], research("Staging fish")),
+
+  rule("R20", "color", 20, th("lure_depth_ft", "gt", "blue_max_ft"),
+    { allow_colors: ["silver"], allow_finishes: ["chrome", "glow"] },
+    ["science"], "Light attenuation past the blue limit. Added by the owner, 2026-11-27: the starter rules said nothing below it, so every color came back."),
 
   // Speed
   rule("R17", "speed", 10, { all: [f("lure_type", "eq", "plug"), f("mode", "eq", "staging")] },

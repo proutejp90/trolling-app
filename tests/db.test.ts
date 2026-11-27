@@ -60,7 +60,7 @@ describe.skipIf(!url)("database", () => {
               (select count(*)::int from public.stations) as stations,
               (select count(distinct lure_type)::int from public.lures where active) as lure_types`,
     );
-    expect(rows[0]).toMatchObject({ r: 19, p: 12, lure_types: 5 });
+    expect(rows[0]).toMatchObject({ r: 20, p: 12, lure_types: 5 });
     expect(rows[0].thresholds).toBeGreaterThanOrEqual(10);
     expect(rows[0].ports).toBeGreaterThan(0);
     expect(rows[0].stations).toBeGreaterThan(20);
@@ -68,7 +68,7 @@ describe.skipIf(!url)("database", () => {
 
   it("lets anyone read the catalog, ports and rules but not change them", async () => {
     await as("anon", null, async () => {
-      expect((await db.query("select count(*)::int as n from public.rules")).rows[0].n).toBe(31);
+      expect((await db.query("select count(*)::int as n from public.rules")).rows[0].n).toBe(32);
       expect((await db.query("select count(*)::int as n from public.lures")).rows[0].n).toBeGreaterThan(0);
       expect((await db.query("update public.rules set enabled = false")).rowCount).toBe(0);
     });

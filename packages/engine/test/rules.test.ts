@@ -28,6 +28,7 @@ const cases: [string, C[], C[]][] = [
   ["R17", [at(30, { mode: "staging" })], [at(30, { mode: "offshore", lure_types_available: ["plug"] })]],
   ["R18", [at(30, { mode: "offshore", lure_types_available: ["plug"] })], [at(30, { mode: "staging" })]],
   ["R19", [at(30), { date: "2026-04-10" }], [{ date: "2026-01-10" }]],
+  ["R20", [at(110.1), at(55.1, { clarity: "murky" })], [at(110), at(55, { clarity: "murky" })]],
   ["P01", [at(54.9)], [at(55)]],
   ["P02", [at(55), at(100)], [at(54.9), at(100.1)]],
   ["P03", [at(100.1)], [at(100)]],
@@ -84,7 +85,19 @@ describe("stained and murky water (R14 with murky_factor)", () => {
     }
     expect(names(at(15)).excluded_finishes.map((e) => e.name)).not.toContain("Plain red");
   });
-  it("moves the green, blue, silver, chrome and glow band up to 22.5 to 55 ft", () => {
+  it("keeps chartreuse and firetiger at mid depths, and allows only silver, chrome and glow past the blue limit", () => {
+    const mid = names(at(30, { clarity: "murky" }));
+    expect(mid.finish_ranking.plug!.map((f) => f.name)).toEqual(expect.arrayContaining(["Chartreuse", "Firetiger", "Fluorescent red"]));
+    expect(mid.excluded_finishes.map((e) => e.name)).toEqual(expect.arrayContaining(["Plain red", "Plain orange"]));
+    const deep = names(at(60, { clarity: "murky" }));
+    expect(deep.finish_ranking.plug!.map((f) => f.name).sort()).toEqual(["Blue glow", "Chrome, blue back", "Chrome, green back", "Glow ladderback", "Green glow", "Plain silver", "White glow"]);
+    expect(deep.excluded_finishes.find((e) => e.name === "Plain red")?.rule_code).toBe("R20");
+    // The same holds in clear water below 110 ft, where only flasher and fly and meat run.
+    const clearDeep = evaluate(ctx(at(120)), rules, thresholds, catalog);
+    expect(clearDeep.excluded_finishes.map((e) => e.name)).toEqual(expect.arrayContaining(["Green", "Blue", "Chartreuse"]));
+    expect(clearDeep.setups.every((s) => /glow/i.test(s.finish_name))).toBe(true);
+  });
+  it("moves the mid-depth band up to 22.5 to 55 ft", () => {
     expect(fires("R11", at(22.4, { clarity: "murky" }))).toBe(false);
     expect(fires("R11", at(22.5, { clarity: "murky" }))).toBe(true);
     expect(fires("R11", at(55, { clarity: "murky" }))).toBe(true);
@@ -154,7 +167,8 @@ describe("properties over random contexts", () => {
     const has = (x: string) => f.finish_types.includes(x as never);
     const k = clarity === "stained" || clarity === "murky" ? 0.5 : 1; // murky_factor halves the color bands
     if (depth >= 20 * k && depth < 45 * k && ["red", "orange"].includes(f.color_family) && !has("fluorescent")) return "R10";
-    if (depth >= 45 * k && depth <= 110 * k && !["green", "blue", "silver"].includes(f.color_family) && !has("chrome") && !has("glow")) return "R11";
+    if (depth >= 45 * k && depth <= 110 * k && !["green", "blue", "silver", "chartreuse"].includes(f.color_family) && !has("chrome") && !has("glow") && !has("fluorescent")) return "R11";
+    if (depth > 110 * k && f.color_family !== "silver" && !has("chrome") && !has("glow")) return "R20";
     if (f.finish_types.every((x) => x === "uv") && !(depth < 60 && clarity === "clear")) return "R13";
     return null;
   };

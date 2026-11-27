@@ -17,11 +17,11 @@ function thresholdRefs(c: Condition): string[] {
 }
 
 describe("seed rules", () => {
-  it("holds the 19 starter rules and the 12 presentation rules, each valid and unique", () => {
+  it("holds the 19 starter rules, R20 the owner added, and the 12 presentation rules, each valid and unique", () => {
     const codes = rules.map((r) => r.code);
     expect(new Set(codes).size).toBe(codes.length);
     expect(codes.filter((c) => c.startsWith("R")).sort()).toEqual(
-      Array.from({ length: 19 }, (_, i) => `R${String(i + 1).padStart(2, "0")}`),
+      Array.from({ length: 20 }, (_, i) => `R${String(i + 1).padStart(2, "0")}`),
     );
     expect(codes.filter((c) => c.startsWith("P")).sort()).toEqual(
       Array.from({ length: 12 }, (_, i) => `P${String(i + 1).padStart(2, "0")}`),
