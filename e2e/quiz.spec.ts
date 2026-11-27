@@ -82,8 +82,19 @@ test.describe("recommendation flow", () => {
     await expect(page.getByText("Lore", { exact: true }).first()).toBeVisible();
   });
 
-  test("a winter date is out of season", async ({ page }) => {
-    await start(page, "2026-01-15");
+  test("a winter date is out of season, with one tap to opening day", async ({ page }) => {
+    await start(page, "2026-11-27");
     await expect(page.getByRole("heading", { name: "Out of season" })).toBeVisible();
+    await expect(page.getByText("November 27 is outside the season.")).toBeVisible();
+    await page.getByRole("button", { name: "Show April 1" }).click();
+    await expect(page.getByRole("heading", { name: "Muskegon, April 1" })).toBeVisible();
+    await answer(page);
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+  });
+
+  test("a January date offers this year's opening day", async ({ page }) => {
+    await start(page, "2026-01-15");
+    await expect(page.getByRole("button", { name: "Show April 1" })).toBeVisible();
   });
 });
