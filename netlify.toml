@@ -1,6 +1,9 @@
 # Netlify build settings. Secrets and connection strings are set in the Netlify UI, never here.
 [build]
   command = "npm run tokens:check && npm run build"
+  # The repo is an npm workspace. Without this, Netlify takes packages/engine for the site
+  # and looks for the Next.js output there.
+  publish = ".next"
 
 [build.environment]
   NODE_VERSION = "22"
