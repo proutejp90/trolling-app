@@ -161,7 +161,9 @@ export function buildConditions(input: {
   });
   // Nearest station with most of the window covered; failing that, the best coverage there is.
   const chosen = histories.filter((h) => h.history.length >= 36).sort((a, b) => a.distance - b.distance)[0] ?? histories.filter((h) => h.history.length >= 24).sort((a, b) => b.history.length - a.history.length)[0];
-  if (chosen) { windHistory = chosen.history; windStation = chosen.name; }
+  // The last 48 hours of wind say nothing about the water on a trip weeks away.
+  if (daysOut > maxDaysOut + 0.5) { /* no wind history for a distant trip */ }
+  else if (chosen) { windHistory = chosen.history; windStation = chosen.name; }
   else if (input.connected) messages.push("There is too little wind history to check for an upwelling.");
 
   // --- Forecast at the trip time ---
