@@ -2,7 +2,7 @@
 
 A mobile web app that tells a Lake Michigan salmon troller which lures to run, how deep and how fast, for a chosen port and date, and explains why. A rules engine decides; an LLM agent explains; a trolling log records every setup, including the ones that catch nothing.
 
-Status: **Phase 0, foundation.** Schema, seed data, Meridian tokens and CI are in place. The rules engine arrives in Phase 1.
+Status: **Phase 1, rules engine.** The engine passes golden scenarios G1 to G16 and a manual quiz returns a spread for April through October. Live conditions arrive in Phase 2.
 
 ## Start from a fresh clone
 
@@ -38,11 +38,15 @@ npm run typecheck
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/conditions npm test
 ```
 
+```bash
+npm run build && npm run test:e2e
+```
+
 ## Where things are
 
 | Path | What |
 |---|---|
-| `packages/engine` | Standalone rules package: rule and threshold shapes |
+| `packages/engine` | Standalone rules engine: `evaluate(context, rules, thresholds, catalog)` |
 | `seed/` | 19 starter rules, 12 presentation rules, thresholds, placeholder ports, stations and lures |
 | `supabase/migrations` | Postgres schema with row-level security |
 | `design-system/` | Meridian, the owner's design system |
