@@ -1,23 +1,23 @@
 "use client";
 
 import { ArrowLeft, Minus, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { evaluate, type EngineContext, type EngineResult, type Setup, type SetupLureType, type Tag } from "@recommender/engine";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { EngineResult, Setup, SetupLureType, Tag } from "@recommender/engine";
+import type { Conditions } from "@/server/conditions";
+import type { QuestionField, Recommendation } from "@/server/recommend";
 import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Choice } from "@/components/ui/choice";
 import { FOOTER, KNOWN_LIMITS, REASONS, SPEED_CAVEAT, TAG_EXPLAINER, TYPE_NAME, TYPE_SPEED_REASON } from "@/lib/reasons";
-import { catalog, ports, rules, thresholds } from "@/lib/ruleset";
 
-type Step = "home" | "questions" | "result";
+type Step = "home" | "questions" | "result" | "conditions";
 type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
+type Clarity = "clear" | "stained" | "murky" | "unknown";
+type Sky = "bright" | "overcast" | "low_light";
 
-const TIME: Record<TimeOfDay, Pick<EngineContext, "light_period" | "hours_after_sunrise">> = {
-  before_sunrise: { light_period: "before_sunrise", hours_after_sunrise: 0 },
-  early: { light_period: "day", hours_after_sunrise: 1 },
-  day: { light_period: "day", hours_after_sunrise: 5 },
-  after_sunset: { light_period: "after_sunset", hours_after_sunrise: 15 },
-};
+const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8]!;
+const ago = (minutes: number) => (minutes < 60 ? `${minutes} minutes ago` : minutes < 36 * 60 ? `${Math.round(minutes / 60)} hours ago` : `${Math.round(minutes / 1440)} days ago`);
 
 const feet = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min} ft down` : `${r.min} to ${r.max} ft down`);
 const mph = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min.toFixed(1)} mph` : `${r.min.toFixed(1)} to ${r.max.toFixed(1)} mph`);
@@ -94,8 +94,19 @@ function SetupCard({ type, setups, result }: { type: SetupLureType; setups: Setu
   );
 }
 
-function Result({ result, portName, date }: { result: EngineResult; portName: string; date: string }) {
-  if (result.status === "out_of_season") {
+function ConditionsSummary({ c }: { c: Conditions }) {
+  if (!c.temp_station) return null;
+  return (
+    <p className="text-fg-secondary">
+      {c.temp_station.name}, {c.temp_station.distance_mi} miles away, read {c.water_temp_surface_f} °F at the surface {ago(c.age_minutes ?? 0)}
+      {c.temp_profile ? ", with temperature at depth" : ""}.
+    </p>
+  );
+}
+
+function Result({ rec, portName, date, onConditions }: { rec: Recommendation; portName: string; date: string; onConditions: () => void }) {
+  const result: EngineResult = rec.engine;
+  if (rec.status === "out_of_season") {
     return (
       <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
         <h2 className="text-t3">Out of season</h2>
@@ -108,7 +119,8 @@ function Result({ result, portName, date }: { result: EngineResult; portName: st
     const last = groups[groups.length - 1];
     if (last && last.type === s.lure_type) last.setups.push(s); else groups.push({ type: s.lure_type, setups: [s] });
   }
-  const confidence = CONFIDENCE.low;
+  const confidence = CONFIDENCE[rec.confidence];
+  const c = rec.conditions;
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -119,11 +131,18 @@ function Result({ result, portName, date }: { result: EngineResult; portName: st
           {result.water_depth_ft ? ` Fish over ${result.water_depth_ft.min} to ${result.water_depth_ft.max} ft of water.` : ""}
         </p>
       </div>
-      <div className="flex items-start gap-3 rounded-md border border-border-subtle bg-surface-1 p-3">
-        <Badge tone={confidence.tone}>{confidence.label}</Badge>
+      <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3">
+        <div className="flex items-start gap-3">
+          <Badge tone={confidence.tone}>{confidence.label}</Badge>
+          <p className="text-fg-secondary">{rec.confidence_reason}</p>
+        </div>
+        <ConditionsSummary c={c} />
         <p className="text-fg-secondary">
-          Live water data is not connected yet. Depth comes from {result.depth_source === "angler" ? "the lure depth you gave" : result.depth_source === "R05" ? "the break depth you gave" : "month defaults"}.
+          Depth comes from {rec.sources.depth}.
+          {rec.sources.sky ? ` Sky comes from ${rec.sources.sky === "you" ? "your answer" : rec.sources.sky === "forecast" ? "the forecast" : "the time of day"}.` : ""}
+          {result.upwelling_likely ? ` ${c.wind_station ?? "Wind history"} shows a day or more of north or east wind.` : ""}
         </p>
+        <button type="button" onClick={onConditions} className="inline-flex h-touch items-center self-start rounded-sm text-accent-text underline underline-offset-2">View conditions</button>
       </div>
       {result.spread_speed_mph ? (
         <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
@@ -170,51 +189,153 @@ function Result({ result, portName, date }: { result: EngineResult; portName: st
   );
 }
 
-export function Quiz() {
+/** The raw inputs: what each station last reported and how old it is. */
+function ConditionsView({ c }: { c: Conditions }) {
+  const north = c.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
+  return (
+    <div className="flex flex-col gap-4">
+      <h2 className="text-t2">Conditions at {c.port.name}</h2>
+      {c.messages.length ? (
+        <ul className="flex list-disc flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3 pl-8 text-fg-secondary">
+          {c.messages.map((m) => <li key={m}>{m}</li>)}
+        </ul>
+      ) : null}
+      <section>
+        <h3 className="text-t3">Stations</h3>
+        {c.readings.length === 0 ? <p className="mt-2 text-fg-secondary">No station linked to this port has reported in the last three days.</p> : (
+          <ul className="mt-2 border-t border-border-subtle">
+            {c.readings.map((r) => (
+              <li key={`${r.source}/${r.station}`} className="border-b border-border-subtle py-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="font-medium">{r.station}</span>
+                  <span className="shrink-0 text-small text-fg-tertiary">{r.distance_mi} mi</span>
+                </div>
+                <p className="text-small text-fg-tertiary">{ago(r.age_minutes)}{r.age_minutes > 360 ? ", more than 6 hours old" : ""}</p>
+                <p className="mt-1 text-fg-secondary tabular-nums">
+                  {[
+                    r.water_temp_f !== null ? `Water ${r.water_temp_f} °F` : null,
+                    r.wind_speed_mph !== null ? `Wind ${r.wind_speed_mph} mph${r.wind_dir_deg !== null ? ` from the ${compass(r.wind_dir_deg)}` : ""}` : null,
+                    r.wave_height_ft !== null ? `Waves ${r.wave_height_ft} ft` : null,
+                    r.air_temp_f !== null ? `Air ${r.air_temp_f} °F` : null,
+                  ].filter(Boolean).join(". ") || "No readings the app uses."}
+                </p>
+                {r.temp_profile && r.temp_profile.length >= 3 ? (
+                  <table className="mt-2 w-full text-small tabular-nums text-fg-secondary">
+                    <caption className="pb-1 text-left text-fg-tertiary">Temperature at depth</caption>
+                    <tbody>
+                      {r.temp_profile.map((p) => (
+                        <tr key={p.depth_ft} className="border-t border-border-subtle">
+                          <th scope="row" className="py-1 text-left font-normal">{p.depth_ft} ft</th>
+                          <td className="py-1 text-right">{p.temp_f} °F</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section>
+        <h3 className="text-t3">Wind, last 48 hours</h3>
+        <p className="mt-2 text-fg-secondary">
+          {c.wind_history.length ? `${c.wind_station}: ${north} of ${c.wind_history.length} hours from the north or east.` : "Too little wind history to say."}
+        </p>
+      </section>
+      <section>
+        <h3 className="text-t3">Forecast for the trip</h3>
+        <p className="mt-2 text-fg-secondary tabular-nums">
+          {c.forecast
+            ? [c.forecast.sky_cover_pct !== null ? `Sky cover ${c.forecast.sky_cover_pct}%` : null, c.forecast.wind_speed_mph !== null ? `Wind ${c.forecast.wind_speed_mph} mph${c.forecast.wind_dir_deg !== null ? ` from the ${compass(c.forecast.wind_dir_deg)}` : ""}` : null, c.forecast.hazards.length ? `Marine hazard in effect: ${c.forecast.hazards.map((h) => `${h.phenomenon}.${h.significance}`).join(", ")}` : null].filter(Boolean).join(". ")
+            : "No forecast covers that time."}
+        </p>
+      </section>
+      <p className="text-small text-fg-tertiary">Buoy data from NOAA NDBC and GLOS. Forecast from the National Weather Service. This app gives no navigation or safety guidance.</p>
+    </div>
+  );
+}
+
+export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   const [step, setStep] = useState<Step>("home");
   const [portName, setPortName] = useState(ports.find((p) => p.name === "Muskegon")?.name ?? ports[0]!.name);
   const [date, setDate] = useState("");
-  const [clarity, setClarity] = useState<NonNullable<EngineContext["clarity"]> | null>(null);
-  const [sky, setSky] = useState<NonNullable<EngineContext["sky"]> | null>(null);
   const [time, setTime] = useState<TimeOfDay | null>(null);
+  const [clarity, setClarity] = useState<Clarity | null>(null);
+  const [sky, setSky] = useState<Sky | null>(null);
   const [wind, setWind] = useState<"calm" | "breezy" | null>(null);
   const [mode, setMode] = useState<"offshore" | "staging" | null>(null);
   const [depthKind, setDepthKind] = useState<"none" | "break" | "lure">("none");
   const [depthValue, setDepthValue] = useState("");
   const [lines, setLines] = useState(4);
+  const [rec, setRec] = useState<Recommendation | null>(null);
+  const [asked, setAsked] = useState<QuestionField[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const latest = useRef(0);
 
-  // Today's date is set on the device so the prerendered page carries no stale date.
+  // Today's date is set on the device so the page carries no stale date.
   useEffect(() => { setDate((d) => d || new Date().toLocaleDateString("en-CA")); }, []);
 
-  const port = ports.find((p) => p.name === portName)!;
-  const month = date ? Number(date.slice(5, 7)) : 0;
   const depthNumber = Number(depthValue);
   const depthGiven = depthKind !== "none" && depthValue !== "" && depthNumber >= 0 && depthNumber <= 400;
 
-  const result = useMemo(() => {
-    if (!date) return null;
-    const context: EngineContext = {
-      date, shore: port.shore, temp_source_level: depthGiven && depthKind === "break" ? 4 : 5, lines_available: lines,
-      ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(time ? TIME[time] : {}),
-      ...(wind ? { wind_calm: wind === "calm" } : {}), ...(mode && month === 8 ? { mode } : {}),
-      ...(depthGiven && depthKind === "break" ? { break_depth_ft: depthNumber } : {}),
-      ...(depthGiven && depthKind === "lure" ? { lure_depth_ft: depthNumber } : {}),
-    };
-    return evaluate(context, rules, thresholds, catalog);
-  }, [date, port.shore, clarity, sky, time, wind, mode, month, depthKind, depthGiven, depthNumber, lines]);
+  const ask = useCallback(async () => {
+    const id = ++latest.current;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/recommend", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          port: portName, date, ...(time ? { time_of_day: time } : {}),
+          answers: {
+            ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(wind ? { wind } : {}), ...(mode ? { mode } : {}), lines,
+            ...(depthGiven && depthKind === "break" ? { break_depth_ft: depthNumber } : {}),
+            ...(depthGiven && depthKind === "lure" ? { lure_depth_ft: depthNumber } : {}),
+          },
+        }),
+      });
+      const body = await res.json();
+      if (id !== latest.current) return null;
+      if (!res.ok) { setError(body.error ?? "Couldn't build a setup. Check your connection and try again."); return null; }
+      setError(null);
+      setRec(body as Recommendation);
+      // A question stays on screen once asked, so answering it does not make it vanish.
+      setAsked((prev) => [...new Set([...prev, ...(body as Recommendation).questions])]);
+      return body as Recommendation;
+    } catch {
+      if (id === latest.current) setError("Couldn't build a setup. Check your connection and try again.");
+      return null;
+    } finally {
+      if (id === latest.current) setBusy(false);
+    }
+  }, [portName, date, time, clarity, sky, wind, mode, lines, depthKind, depthGiven, depthNumber]);
 
-  const needsDepth = result?.status === "needs_input";
-  const answered = clarity && sky && time && wind && (month !== 8 || mode) && !needsDepth;
+  // Each answer can settle other questions (the forecast may cover the chosen time), so ask again as answers change.
+  useEffect(() => { if (step === "questions") void ask(); }, [step, ask]);
+
+  const needsDepth = rec?.questions.includes("depth") ?? false;
+  const ready = rec?.status === "ok" && !busy;
+  const show = (f: QuestionField) => asked.includes(f);
 
   const back = (to: Step) => (
     <button type="button" onClick={() => setStep(to)} className="-ml-2 inline-flex h-touch items-center gap-2 self-start rounded-sm px-2 text-fg-secondary hover:bg-surface-3 hover:text-fg">
       <ArrowLeft size={16} strokeWidth={1.5} aria-hidden="true" /> Back
     </button>
   );
+  const errorLine = error ? <p role="alert" className="rounded-sm bg-danger-soft p-3 text-danger">{error}</p> : null;
 
   if (step === "home") {
     return (
-      <form className="flex flex-1 flex-col gap-4" onSubmit={(e) => { e.preventDefault(); setStep(result?.status === "out_of_season" ? "result" : "questions"); }}>
+      <form
+        className="flex flex-1 flex-col gap-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setAsked([]);
+          const first = await ask();
+          if (first) setStep(first.status === "out_of_season" ? "result" : "questions");
+        }}
+      >
         <div>
           <h1 className="text-t1">Get a starting setup</h1>
           <p className="mt-2 text-fg-secondary">Pick a port and a date to see which lures to run, how deep and how fast, and why.</p>
@@ -230,30 +351,35 @@ export function Quiz() {
           <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} className={inputClass} />
         </label>
         <div className="mt-auto flex flex-col gap-2">
-          <Button type="submit" variant="primary" size="touch" disabled={!date}>Get setup</Button>
-          <p className="text-small text-fg-tertiary">Live buoy and report data are not connected yet. This build asks you for conditions.</p>
+          {errorLine}
+          <Button type="submit" variant="primary" size="touch" disabled={!date || busy}>Get setup</Button>
         </div>
       </form>
     );
   }
 
   if (step === "questions") {
+    const c = rec?.conditions;
     return (
-      <form className="flex flex-1 flex-col gap-6" onSubmit={(e) => { e.preventDefault(); if (answered) setStep("result"); }}>
+      <form className="flex flex-1 flex-col gap-6" onSubmit={(e) => { e.preventDefault(); if (ready) setStep("result"); }}>
         {back("home")}
-        <h1 className="text-t2">{portName}, {monthName(date)}</h1>
-        <Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} />
-        <Choice legend="Sky" value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} />
-        <Choice legend="Time on the water" value={time} onChange={setTime} options={[{ value: "before_sunrise", label: "Before sunrise" }, { value: "early", label: "First two hours" }, { value: "day", label: "Daytime" }, { value: "after_sunset", label: "After sunset" }]} />
-        <Choice legend="Wind" value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} />
-        {month === 8 ? <Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /> : null}
+        <div>
+          <h1 className="text-t2">{portName}, {monthName(date)}</h1>
+          {c ? <div className="mt-1"><ConditionsSummary c={c} /></div> : null}
+          {c?.messages.length ? <p className="mt-1 text-fg-secondary">{c.messages[0]}</p> : null}
+        </div>
+        {show("time_of_day") ? <Choice legend="Time on the water" value={time} onChange={setTime} options={[{ value: "before_sunrise", label: "Before sunrise" }, { value: "early", label: "First two hours" }, { value: "day", label: "Daytime" }, { value: "after_sunset", label: "After sunset" }]} /> : null}
+        {show("clarity") ? <Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} /> : null}
+        {show("sky") ? <Choice legend="Sky" hint="No forecast covers that time." value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} /> : null}
+        {show("wind") ? <Choice legend="Wind" hint="No forecast covers that time." value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} /> : null}
+        {show("mode") ? <Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /> : null}
         <div className="flex flex-col gap-2">
           <Choice
             legend="Depth"
-            hint={needsDepth ? "There is no depth default for this month without temperature data. Give the break depth or the lure depth you plan to run." : "Optional. Leave it to the month default, or give what you know."}
+            hint={needsDepth || (show("depth") && depthKind !== "none") ? "There is no depth default for this month without temperature at depth. Give the break depth or the lure depth you plan to run." : "Optional. Leave it to the app, or give what you know."}
             value={depthKind}
             onChange={setDepthKind}
-            options={[...(needsDepth ? [] : [{ value: "none" as const, label: "Use the default" }]), { value: "break" as const, label: "I know the break" }, { value: "lure" as const, label: "I know my lure depth" }]}
+            options={[...(show("depth") ? [] : [{ value: "none" as const, label: c?.temp_profile ? "Use the buoy" : "Use the default" }]), { value: "break" as const, label: "I know the break" }, { value: "lure" as const, label: "I know my lure depth" }]}
           />
           {depthKind !== "none" ? (
             <label className="flex flex-col gap-1">
@@ -271,17 +397,27 @@ export function Quiz() {
           </div>
         </div>
         <div className="mt-auto flex flex-col gap-2">
-          <Button type="submit" variant="primary" size="touch" disabled={!answered}>Show setup</Button>
-          {!answered ? <p className="text-small text-fg-tertiary">Answer each question to see the setup.</p> : null}
+          {errorLine}
+          <Button type="submit" variant="primary" size="touch" disabled={!ready}>Show setup</Button>
+          {!ready && !error ? <p className="text-small text-fg-tertiary">Answer each question to see the setup.</p> : null}
         </div>
       </form>
     );
   }
 
+  if (step === "conditions" && rec) {
+    return (
+      <div className="flex flex-1 flex-col gap-4">
+        {back("result")}
+        <ConditionsView c={rec.conditions} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-1 flex-col gap-4">
-      {back(result?.status === "out_of_season" ? "home" : "questions")}
-      {result ? <Result result={result} portName={portName} date={date} /> : null}
+      {back(rec?.status === "out_of_season" ? "home" : "questions")}
+      {rec ? <Result rec={rec} portName={portName} date={date} onConditions={() => setStep("conditions")} /> : null}
       <p className="mt-auto border-t border-border-subtle pt-4 text-small text-fg-tertiary">{FOOTER}</p>
     </div>
   );

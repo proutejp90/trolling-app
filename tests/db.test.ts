@@ -63,7 +63,7 @@ describe.skipIf(!url)("database", () => {
     expect(rows[0]).toMatchObject({ r: 19, p: 12, lure_types: 5 });
     expect(rows[0].thresholds).toBeGreaterThanOrEqual(10);
     expect(rows[0].ports).toBeGreaterThan(0);
-    expect(rows[0].stations).toBe(6);
+    expect(rows[0].stations).toBeGreaterThan(20);
   });
 
   it("lets anyone read the catalog, ports and rules but not change them", async () => {

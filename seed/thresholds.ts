@@ -51,4 +51,10 @@ export const thresholds: Threshold[] = [
   t("obs_stale_hours", 6, "h", "Observations older than this show the stale state."),
   t("obs_fresh_hours", 3, "h", "Observations must be newer than this for high confidence."),
   t("report_max_age_days", 21, "d", "Reports older than this are ignored."),
+  t("obs_max_age_hours", 24, "h", "Buoy readings older than this are not used at all.", true),
+  t("trip_max_days_ahead", 2, "d", "Buoy readings are used only for trips within this many days of now.", true),
+
+  // Reading the forecast
+  t("sky_overcast_min_pct", 70, "%", "Forecast sky cover at or above this counts as overcast; below it, bright.", true),
+  t("wind_calm_max_mph", 6, "mph", "Forecast wind at or below this counts as calm for P07.", true),
 ];

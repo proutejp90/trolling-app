@@ -17,14 +17,17 @@ Mobile web app that gives a Lake Michigan salmon troller a starting spread: whic
 ## Commands
 - `npm run setup`: install, generate tokens, migrate, seed, build
 - `npm test`: Vitest. Database tests run when `DATABASE_URL` is set
-- `npm run test:e2e`: Playwright flows against a built app (`npm run build` first)
+- `npm run test:e2e`: Playwright flows against a built app and the database (`npm run build` first)
 - `npm run lint`: ESLint plus the design lint (no hex colors, no default Tailwind palette)
 - `npm run tokens`: regenerate `src/styles/tokens.css` after `design-system/tokens.json` changes
 - `npm run db:migrate`, `npm run db:seed`, `npm run db:reset` (local only)
+- `npm run job:refresh`: run one conditions refresh
 - `npm run db:seed:sql`: print the seed as SQL for a database this machine cannot reach
 
 ## Layout
 - `packages/engine`: the rules engine, `evaluate(context, rules, thresholds, catalog)`. Golden scenarios live in `packages/engine/test`
+- `src/server`: `fetcher.ts` is the only module that fetches; `sources/` parse NDBC, Seagull and NWS; `jobs/refresh.ts` fills the cache; `conditions.ts` reads it
+- `fixtures/`: recorded responses. `FIXTURES=replay:<set>` replays them; see `fixtures/README.md`
 - `seed/`: starter rules, thresholds, ports, stations, placeholder lures
 - `supabase/migrations`: schema. `supabase/local-shim.sql` is for plain Postgres only
 - `design-system/`: Meridian, copied from the owner's design system. Do not edit here

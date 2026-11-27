@@ -7,7 +7,8 @@ import { ruleSchema, thresholdSchema } from "@recommender/engine";
 import { lures } from "../seed/lures";
 import { ports } from "../seed/ports";
 import { rules } from "../seed/rules";
-import { distanceMi, PORT_STATION_LINK_MAX_MI, stations } from "../seed/stations";
+import { distanceMi } from "../seed/geo";
+import { PORT_STATION_LINK_MAX_MI, stations } from "../seed/stations";
 import { thresholds } from "../seed/thresholds";
 
 const lit = (v: unknown) => `'${JSON.stringify(v).replace(/'/g, "''")}'::jsonb`;
@@ -18,10 +19,14 @@ select name, state, lake, lat, lon, shore, home_river from jsonb_to_recordset(${
   as x(name text, state text, lake text, lat float8, lon float8, shore text, home_river text)
 on conflict (name, state) do nothing;`);
 
-out.push(`insert into public.stations (source, external_id, name, lake, lat, lon, has_temp_profile, seasonal)
-select source, external_id, name, lake, lat, lon, has_temp_profile, seasonal from jsonb_to_recordset(${lit(stations)})
-  as x(source text, external_id text, name text, lake text, lat float8, lon float8, has_temp_profile bool, seasonal bool)
-on conflict (source, external_id) do nothing;`);
+out.push(`insert into public.stations (source, external_id, name, lake, lat, lon, has_temp_profile, seasonal, meta)
+select source, external_id, name, lake, lat, lon, has_temp_profile, seasonal, meta from jsonb_to_recordset(${lit(stations)})
+  as x(source text, external_id text, name text, lake text, lat float8, lon float8, has_temp_profile bool, seasonal bool, meta jsonb)
+on conflict (source, external_id) do update set name = excluded.name, lat = excluded.lat, lon = excluded.lon,
+  has_temp_profile = excluded.has_temp_profile, seasonal = excluded.seasonal, meta = excluded.meta;
+delete from public.stations where source <> 'nws' and (source || '/' || external_id) not in (${stations.map((s) => `'${s.source}/${s.external_id}'`).join(", ")});
+delete from public.port_stations;
+update public.ports set nws = null;`);
 
 const links = ports.flatMap((p) =>
   stations
