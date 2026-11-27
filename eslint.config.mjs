@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: [".next/**", "node_modules/**", "next-env.d.ts", "design-system/**", "*.config.js", "docs/**", "fixtures/**", "test-results/**", "playwright-report/**"] },
+  { ignores: [".next/**", "node_modules/**", "next-env.d.ts", "design-system/**", "*.config.js", "docs/**", "fixtures/**", "evals/results/**", "test-results/**", "playwright-report/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ["scripts/**/*.mjs"], languageOptions: { globals: { process: "readonly", console: "readonly" } } },

@@ -136,3 +136,74 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     await expect(recommend({ port: "Atlantis", date: "2026-07-15" }, { db, now: new Date() })).rejects.toThrow(/Unknown port/);
   });
 });
+
+describe.skipIf(!url)("explanations through the database", () => {
+  let db: pg.Client;
+  const now = new Date("2026-08-10T14:00:00Z");
+  const input = { port: "Muskegon", date: "2026-08-10", time_of_day: "day" as const, answers: { clarity: "clear" as const, sky: "bright" as const, wind: "breezy" as const, mode: "offshore" as const } };
+  const agentWords = {
+    conditions_summary: "In August, Chinook are offshore and some begin to stage near river mouths.",
+    groups: [
+      { lure_type: "flasher_fly", reasons: [{ text: "At this depth, flasher and fly leads the spread.", rule_codes: ["P02"] }] },
+      { lure_type: "meat_rig", reasons: [{ text: "Meat rigs go on the deepest lines once the sun is well up.", rule_codes: ["P06"] }] },
+    ],
+    report_notes: [], confidence_reason: "There is no live water data, so the depth is a month default.", caveats: [],
+  };
+
+  beforeAll(async () => { db = new pg.Client({ connectionString: url }); await db.connect(); });
+  afterAll(async () => { await db.query("truncate public.recommendations cascade"); await db.end(); });
+  beforeEach(async () => { await db.query("truncate public.observations, public.forecasts, public.recommendations cascade"); });
+
+  it("shows templated reasons at once, then stores and reuses the agent's explanation for 30 minutes", async () => {
+    const { explainRecommendation } = await import("../src/server/recommend");
+    const rec = await recommend(input, { db, now });
+    expect(rec.explanation.source).toBe("template");
+    expect(rec.explanation.groups.map((g) => g.lure_type)).toEqual(["flasher_fly", "meat_rig"]);
+
+    let calls = 0;
+    const call = async () => { calls++; return agentWords; };
+    const first = await explainRecommendation({ ...input, recommendation_id: rec.recommendation_id! }, { db, now, call, model: "test-model" });
+    expect(first).toMatchObject({ cached: false, attempts: 1 });
+    expect(first.explanation).toMatchObject({ source: "agent", model: "test-model" });
+    const row = (await db.query("select used_fallback, model, prompt_version, latency_ms, agent_output from public.recommendations where id = $1", [rec.recommendation_id])).rows[0];
+    expect(row).toMatchObject({ used_fallback: false, model: "test-model" });
+    expect(row.prompt_version).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
+    expect(row.agent_output.source).toBe("agent");
+
+    const again = await explainRecommendation(input, { db, now: new Date(now.getTime() + 20 * 60_000), call, model: "test-model" });
+    expect(again.cached).toBe(true);
+    expect(calls).toBe(1);
+    const later = await explainRecommendation(input, { db, now: new Date(now.getTime() + 61 * 60_000), call, model: "test-model" });
+    expect(later.cached).toBe(false);
+    expect(calls).toBe(2);
+  });
+
+  it("with the API key gone it still returns a usable result, and records the fallback", async () => {
+    const { explainRecommendation } = await import("../src/server/recommend");
+    const rec = await recommend(input, { db, now });
+    const dead = async () => { throw new Error("401 invalid x-api-key"); };
+    const r = await explainRecommendation({ ...input, recommendation_id: rec.recommendation_id! }, { db, now, call: dead, model: "test-model" });
+    expect(r.explanation.source).toBe("template");
+    expect(r.explanation.groups.every((g) => g.reasons.length > 0)).toBe(true);
+    const row = (await db.query("select used_fallback, agent_output from public.recommendations where id = $1", [rec.recommendation_id])).rows[0];
+    expect(row).toEqual({ used_fallback: true, agent_output: null });
+    // No key configured at all: no call is attempted.
+    const none = await explainRecommendation(input, { db, now, call: null, model: null });
+    expect(none).toMatchObject({ attempts: 0, cached: false });
+  });
+
+  it("asks about clarity only when it would change the spread", async () => {
+    const asked = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "day", answers: { sky: "bright", wind: "breezy", mode: "offshore" } }, { db, now });
+    expect(asked.questions).toContain("clarity");
+    // A catalog where every answer gives the same spread: one glow finish per lure.
+    await db.query("begin");
+    try {
+      await db.query("delete from public.lure_finishes where name <> 'Green glow'");
+      const same = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "day", answers: { sky: "bright", wind: "breezy", mode: "offshore" } }, { db, now });
+      expect(same.questions).not.toContain("clarity");
+      expect(same.status).toBe("ok");
+    } finally {
+      await db.query("rollback");
+    }
+  });
+});

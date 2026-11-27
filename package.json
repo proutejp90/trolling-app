@@ -23,9 +23,11 @@
     "db:seed": "tsx scripts/db.mts seed",
     "db:seed:sql": "tsx scripts/seed-sql.mts",
     "db:reset": "tsx scripts/db.mts reset",
-    "job:refresh": "tsx scripts/job-refresh.mts"
+    "job:refresh": "tsx scripts/job-refresh.mts",
+    "evals": "tsx scripts/run-evals.mts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0",
     "@recommender/engine": "*",
     "lucide-react": "^0.469.0",
     "next": "^16.0.0",

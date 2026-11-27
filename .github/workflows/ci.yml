@@ -35,3 +35,27 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  # Agent evals call the real model, so they run only when the prompt, rules or model change and a key is set.
+  evals:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -qE '^(src/server/agent/|src/lib/reasons\.ts|seed/rules\.ts|seed/thresholds\.ts|evals/|packages/engine/src/)'; then echo "run=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.run == 'true' && env.ANTHROPIC_API_KEY != ''
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.changed.outputs.run == 'true' && env.ANTHROPIC_API_KEY != ''
+        run: npm ci && npm run evals
+      - if: steps.changed.outputs.run == 'true' && env.ANTHROPIC_API_KEY == ''
+        run: echo "::warning::Agent files changed but ANTHROPIC_API_KEY is not set as a repository secret, so the evals did not run."

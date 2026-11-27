@@ -21,12 +21,14 @@ Mobile web app that gives a Lake Michigan salmon troller a starting spread: whic
 - `npm run lint`: ESLint plus the design lint (no hex colors, no default Tailwind palette)
 - `npm run tokens`: regenerate `src/styles/tokens.css` after `design-system/tokens.json` changes
 - `npm run db:migrate`, `npm run db:seed`, `npm run db:reset` (local only)
+- `npm run evals`: agent evals against the real model; needs `ANTHROPIC_API_KEY` and costs money
 - `npm run job:refresh`: run one conditions refresh
 - `npm run db:seed:sql`: print the seed as SQL for a database this machine cannot reach
 
 ## Layout
 - `packages/engine`: the rules engine, `evaluate(context, rules, thresholds, catalog)`. Golden scenarios live in `packages/engine/test`
 - `src/server`: `fetcher.ts` is the only module that fetches; `sources/` parse NDBC, Seagull and NWS; `jobs/refresh.ts` fills the cache; `conditions.ts` reads it
+- `src/server/agent`: the explaining agent. `schema.ts` (words only), `checks.ts` (server-side checks), `template.ts` (fallback), `prompt.ts` (versioned), `explain.ts` (retry and fallback). Bump `PROMPT_VERSION` on any prompt change and rerun `npm run evals`
 - `fixtures/`: recorded responses. `FIXTURES=replay:<set>` replays them; see `fixtures/README.md`
 - `seed/`: starter rules, thresholds, ports, stations, placeholder lures
 - `supabase/migrations`: schema. `supabase/local-shim.sql` is for plain Postgres only

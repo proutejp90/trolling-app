@@ -2,8 +2,13 @@
  * Builds a recommendation: conditions from the cache, then the rules engine.
  * The agent joins in Phase 3; everything here works without it.
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { evaluate, type EngineContext, type EngineResult } from "@recommender/engine";
+import { agentConfigured, agentModel, callModel } from "./agent/client";
+import { explain, type ModelCall } from "./agent/explain";
+import type { Explanation } from "./agent/schema";
+import { templateExplanation } from "./agent/template";
 import { buildConditions, loadConditions, type Conditions } from "./conditions";
 import type { Queryable } from "./db";
 import { bundledRuleset, loadRuleset, type Ruleset } from "./ruleset";
@@ -40,11 +45,22 @@ export interface Recommendation {
   confidence_reason: string;
   ruleset_source: Ruleset["source"];
   recommendation_id: string | null;
+  /** Reasons and summary. Templated here; POST /api/explain swaps in the agent's version. */
+  explanation: Explanation;
+  /** True when an agent explanation can be requested for this result. */
+  agent_available: boolean;
+}
+
+/** Same port, date, hour and answers give the same key, so an explanation is reused for 30 minutes. */
+export function cacheKey(input: RecommendInput, now: Date): string {
+  const a = input.answers ?? {};
+  const answers = Object.fromEntries(Object.entries(a).sort(([x], [y]) => x.localeCompare(y)));
+  return createHash("sha256").update(JSON.stringify([input.port.toLowerCase(), input.date, input.time_of_day ?? null, answers, now.toISOString().slice(0, 13)])).digest("hex").slice(0, 32);
 }
 
 export class UnknownPortError extends Error {}
 
-export async function recommend(raw: RecommendInput, deps: { db: Queryable | null; now: Date }): Promise<Recommendation> {
+export async function recommend(raw: RecommendInput, deps: { db: Queryable | null; now: Date; store?: boolean }): Promise<Recommendation> {
   const input = recommendInput.parse(raw);
   const ruleset = deps.db ? await loadRuleset(deps.db) : bundledRuleset();
   const port = ruleset.ports.find((p) => p.id === input.port || p.name.toLowerCase() === input.port.toLowerCase());
@@ -77,10 +93,15 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   };
   const engine = evaluate(context, ruleset.rules, ruleset.thresholds, ruleset.catalog);
 
+  // Clarity is asked only when it would change the spread: the engine is run once per answer and compared.
+  const spreadOf = (e: EngineResult) => JSON.stringify(e.setups.map((x) => [x.lure_id, x.finish_id, x.attractor_finish_id]));
+  const clarityMatters = !a.clarity && engine.status === "ok" &&
+    new Set((["clear", "stained", "murky", "unknown"] as const).map((clarity) => spreadOf(evaluate({ ...context, clarity }, ruleset.rules, ruleset.thresholds, ruleset.catalog)))).size > 1;
+
   const questions: QuestionField[] = [];
   if (engine.status !== "out_of_season") {
     if (!input.time_of_day) questions.push("time_of_day");
-    if (!a.clarity) questions.push("clarity");
+    if (!a.clarity && (clarityMatters || engine.status !== "ok")) questions.push("clarity");
     if (!sky && input.time_of_day) questions.push("sky");
     if (windCalm === undefined && input.time_of_day) questions.push("wind");
     if (month === 8 && !a.mode) questions.push("mode");
@@ -104,11 +125,11 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   }
 
   let recommendation_id: string | null = null;
-  if (deps.db && port.id && status === "ok") {
+  if (deps.db && port.id && status === "ok" && deps.store !== false) {
     const { rows } = await deps.db.query(
-      `insert into public.recommendations (port_id, requested_for, context, engine_output, temp_source_level, confidence, used_fallback)
-       values ($1, $2, $3, $4, $5, $6, true) returning id`,
-      [port.id, input.date, JSON.stringify({ input, context, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), level, confidence],
+      `insert into public.recommendations (port_id, requested_for, cache_key, context, engine_output, temp_source_level, confidence, used_fallback)
+       values ($1, $2, $3, $4, $5, $6, $7, true) returning id`,
+      [port.id, input.date, cacheKey(input, deps.now), JSON.stringify({ input, context, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), level, confidence],
     );
     recommendation_id = rows[0].id;
   }
@@ -121,5 +142,52 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
       depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
     },
     confidence, confidence_reason, ruleset_source: ruleset.source, recommendation_id,
+    explanation: templateExplanation(engine, conditions, confidence_reason),
+    agent_available: status === "ok" && engine.setups.length > 0 && agentConfigured(),
   };
+}
+
+const explainInput = recommendInput.extend({ recommendation_id: z.string().uuid().optional() });
+export { explainInput };
+
+/**
+ * The agent's explanation for a recommendation. The recommendation is rebuilt
+ * here from the same inputs: nothing the browser sends is trusted as engine output.
+ * Always answers: with the agent's words when they pass the checks, else the templates.
+ */
+export async function explainRecommendation(
+  raw: z.input<typeof explainInput>,
+  deps: { db: Queryable | null; now: Date; call?: ModelCall | null; model?: string | null },
+): Promise<{ explanation: Explanation; cached: boolean; attempts: number }> {
+  const { recommendation_id, ...input } = explainInput.parse(raw);
+  const rec = await recommend(input, { db: deps.db, now: deps.now, store: false });
+  const call = deps.call === undefined ? (agentConfigured() ? callModel : null) : deps.call;
+  const model = deps.model === undefined ? (agentConfigured() ? agentModel() : null) : deps.model;
+  if (rec.status !== "ok" || !call) return { explanation: rec.explanation, cached: false, attempts: 0 };
+
+  const key = cacheKey(input, deps.now);
+  if (deps.db) {
+    const hit = await deps.db.query(
+      `select agent_output from public.recommendations
+       where cache_key = $1 and agent_output is not null and not used_fallback and created_at > $2
+       order by created_at desc limit 1`,
+      [key, new Date(deps.now.getTime() - 30 * 60_000)],
+    );
+    if (hit.rows[0]) return { explanation: hit.rows[0].agent_output as Explanation, cached: true, attempts: 0 };
+  }
+
+  const result = await explain(
+    { port: rec.conditions.port.name, date: input.date, engine: rec.engine, conditions: rec.conditions, confidence: rec.confidence, confidenceReason: rec.confidence_reason, depthSource: rec.sources.depth, reports: [] },
+    { call, model },
+  );
+  const fromAgent = result.explanation.source === "agent";
+  if (deps.db && recommendation_id) {
+    await deps.db.query(
+      `update public.recommendations
+       set agent_output = $2, used_fallback = $3, model = $4, prompt_version = $5, latency_ms = $6
+       where id = $1 and cache_key = $7`,
+      [recommendation_id, fromAgent ? JSON.stringify(result.explanation) : null, !fromAgent, model, result.explanation.prompt_version, result.latency_ms, key],
+    );
+  }
+  return { explanation: result.explanation, cached: false, attempts: result.attempts };
 }
