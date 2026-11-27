@@ -164,7 +164,7 @@ function Result({ rec, portName, date, onConditions }: { rec: Recommendation; po
           <ul className="mt-2 flex list-disc flex-col gap-2 pl-5 text-fg-secondary">
             {result.dropped_types.map((d) => <li key={d.lure_type}>{d.reason}</li>)}
             {result.dropped_lures.map((d) => <li key={d.lure_id}>{d.name}: {d.reason}</li>)}
-            {result.notes.filter((n) => !n.includes("DECISIONS.md")).map((n) => <li key={n}>{n}</li>)}
+            {result.notes.map((n) => <li key={n}>{n}</li>)}
           </ul>
         </section>
       ) : null}

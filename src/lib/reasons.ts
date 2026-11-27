@@ -19,7 +19,7 @@ export const REASONS: Record<string, string> = {
   R11: "At this depth, green, blue, silver, chrome and glow are what still show.",
   R12: "Glow leads when lures run deep or light is low.",
   R13: "UV finishes are left out unless the lure runs shallow in clear water.",
-  R14: "Stained water favors chartreuse, firetiger and glow.",
+  R14: "Stained water favors chartreuse, firetiger and glow, and colors fade at shallower depths.",
   R15: "Clear water under a bright sky favors chrome or silver with a green or blue back, in smaller sizes.",
   R16: "Staging fish respond to fluorescent and glow finishes, ladderback patterns first.",
   R17: "For staging fish, plugs hold their action across a wide speed range.",

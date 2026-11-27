@@ -90,6 +90,8 @@ export interface EngineResult {
   dropped_types: { lure_type: SetupLureType; reason: string; rule_code?: string }[];
   dropped_lures: { lure_id: string; name: string; reason: string }[];
   attractor_size_in: Range | null;
+  /** What the color depth bands were multiplied by. 1 in clear water; the murky factor in stained or murky water. */
+  color_band_factor: number;
   tips: { text: string; rule_code: string }[];
   notes: string[];
   fired: FiredRule[];

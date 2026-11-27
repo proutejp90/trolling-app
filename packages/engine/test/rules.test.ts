@@ -73,6 +73,35 @@ describe("each rule at its boundaries", () => {
   });
 });
 
+describe("stained and murky water (R14 with murky_factor)", () => {
+  const names = (c: C) => evaluate(ctx({ ...c, lure_types_available: ["plug"] }), rules, thresholds, catalog);
+  it("halves the color bands: plain red goes at 10 ft, not 20", () => {
+    for (const clarity of ["stained", "murky"] as const) {
+      expect(fires("R09", at(9.9, { clarity }))).toBe(true);
+      expect(fires("R09", at(10, { clarity }))).toBe(false);
+      expect(fires("R10", at(10, { clarity }))).toBe(true);
+      expect(names(at(15, { clarity })).excluded_finishes.map((e) => e.name)).toEqual(expect.arrayContaining(["Plain red", "Plain orange"]));
+    }
+    expect(names(at(15)).excluded_finishes.map((e) => e.name)).not.toContain("Plain red");
+  });
+  it("moves the green, blue, silver, chrome and glow band up to 22.5 to 55 ft", () => {
+    expect(fires("R11", at(22.4, { clarity: "murky" }))).toBe(false);
+    expect(fires("R11", at(22.5, { clarity: "murky" }))).toBe(true);
+    expect(fires("R11", at(55, { clarity: "murky" }))).toBe(true);
+    expect(fires("R11", at(55.1, { clarity: "murky" }))).toBe(false);
+  });
+  it("leaves clear and unknown water on the full bands, and reports the factor used", () => {
+    expect(names(at(15)).color_band_factor).toBe(1);
+    expect(names(at(15, { clarity: "unknown" })).color_band_factor).toBe(1);
+    expect(names(at(15, { clarity: "murky" })).color_band_factor).toBe(0.5);
+  });
+  it("follows the owner's value when the factor is tuned", () => {
+    const th = thresholds.map((t) => (t.name === "murky_factor" ? { ...t, value: 0.8 } : t));
+    expect(fires("R09", at(15.9, { clarity: "murky" }), th)).toBe(true); // red now carries to 16 ft
+    expect(fires("R09", at(16, { clarity: "murky" }), th)).toBe(false);
+  });
+});
+
 describe("presentation details", () => {
   it("P02 keeps exactly one spoon line beside flasher and fly", () => {
     const r = evaluate(ctx(at(60)), rules, thresholds, catalog);
@@ -123,8 +152,9 @@ describe("properties over random contexts", () => {
   const excluded = (id: string, depth: number, clarity: string | undefined) => {
     const f = finishes.get(id)!;
     const has = (x: string) => f.finish_types.includes(x as never);
-    if (depth >= 20 && depth < 45 && ["red", "orange"].includes(f.color_family) && !has("fluorescent")) return "R10";
-    if (depth >= 45 && depth <= 110 && !["green", "blue", "silver"].includes(f.color_family) && !has("chrome") && !has("glow")) return "R11";
+    const k = clarity === "stained" || clarity === "murky" ? 0.5 : 1; // murky_factor halves the color bands
+    if (depth >= 20 * k && depth < 45 * k && ["red", "orange"].includes(f.color_family) && !has("fluorescent")) return "R10";
+    if (depth >= 45 * k && depth <= 110 * k && !["green", "blue", "silver"].includes(f.color_family) && !has("chrome") && !has("glow")) return "R11";
     if (f.finish_types.every((x) => x === "uv") && !(depth < 60 && clarity === "clear")) return "R13";
     return null;
   };
