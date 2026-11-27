@@ -1,0 +1,24 @@
+import type { Metadata, Viewport } from "next";
+import "@/styles/globals.css";
+
+export const metadata: Metadata = {
+  // Placeholder name until the owner supplies the product name and brand.
+  title: "Conditions recommender",
+  description: "A starting trolling setup for Lake Michigan Chinook, from conditions, reports and angler experience.",
+};
+
+export const viewport: Viewport = { width: "device-width", initialScale: 1 };
+
+// Runs before paint: the saved choice wins, else the phone's setting.
+const themeScript = `(function(){try{var t=localStorage.getItem("theme");if(t!=="light"&&t!=="dark"){t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme="dark"}})()`;
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body>{children}</body>
+    </html>
+  );
+}
