@@ -20,6 +20,7 @@ Mobile web app that gives a Lake Michigan salmon troller a starting spread: whic
 - `npm run lint`: ESLint plus the design lint (no hex colors, no default Tailwind palette)
 - `npm run tokens`: regenerate `src/styles/tokens.css` after `design-system/tokens.json` changes
 - `npm run db:migrate`, `npm run db:seed`, `npm run db:reset` (local only)
+- `npm run db:seed:sql`: print the seed as SQL for a database this machine cannot reach
 
 ## Layout
 - `packages/engine`: rule and threshold shapes now; `evaluate()` in Phase 1

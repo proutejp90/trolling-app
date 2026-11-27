@@ -27,10 +27,21 @@ async function migrate(db: pg.Client) {
     console.log("applied local auth shim");
   }
   await db.query("create table if not exists public._migrations (name text primary key, applied_at timestamptz not null default now())");
+  // The table sits in the API-exposed schema on Supabase; with RLS on and no policies only the service role reads it.
+  await db.query("alter table public._migrations enable row level security");
+  // Migrations applied through Supabase's own tooling are recorded there under the name without the timestamp.
+  const supa = await db.query("select to_regclass('supabase_migrations.schema_migrations') as t");
+  const viaSupabase = new Set<string>(
+    supa.rows[0].t ? (await db.query("select name from supabase_migrations.schema_migrations")).rows.map((r) => r.name) : [],
+  );
   const dir = join(root, "supabase/migrations");
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
     const done = await db.query("select 1 from public._migrations where name = $1", [file]);
     if (done.rowCount) continue;
+    if (viaSupabase.has(file.replace(/^\d+_/, "").replace(/\.sql$/, ""))) {
+      await db.query("insert into public._migrations (name) values ($1)", [file]);
+      continue;
+    }
     await db.query("begin");
     try {
       await db.query(readFileSync(join(dir, file), "utf8"));
