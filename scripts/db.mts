@@ -14,7 +14,8 @@ import { ruleSchema, thresholdSchema } from "@recommender/engine";
 import { lures } from "../seed/lures";
 import { ports } from "../seed/ports";
 import { rules } from "../seed/rules";
-import { distanceMi, PORT_STATION_LINK_MAX_MI, stations } from "../seed/stations";
+import { distanceMi } from "../seed/geo";
+import { PORT_STATION_LINK_MAX_MI, stations } from "../seed/stations";
 import { thresholds } from "../seed/thresholds";
 
 const root = join(import.meta.dirname, "..");
@@ -69,17 +70,25 @@ async function seed(db: pg.Client) {
 
   for (const s of stations) {
     await db.query(
-      `insert into public.stations (source, external_id, name, lake, lat, lon, has_temp_profile, seasonal)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
-       on conflict (source, external_id) do nothing`,
-      [s.source, s.external_id, s.name, s.lake, s.lat, s.lon, s.has_temp_profile, s.seasonal],
+      `insert into public.stations (source, external_id, name, lake, lat, lon, has_temp_profile, seasonal, meta)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (source, external_id) do update set name = excluded.name, lat = excluded.lat, lon = excluded.lon,
+         has_temp_profile = excluded.has_temp_profile, seasonal = excluded.seasonal, meta = excluded.meta`,
+      [s.source, s.external_id, s.name, s.lake, s.lat, s.lon, s.has_temp_profile, s.seasonal, JSON.stringify(s.meta)],
     );
   }
 
+  // The station list is generated, not owner-edited: drop buoys that left it.
+  await db.query(
+    "delete from public.stations where source <> 'nws' and (source || '/' || external_id) <> all($1::text[])",
+    [stations.map((s) => `${s.source}/${s.external_id}`)],
+  );
+
   // Link each port to nearby stations, nearest first. Recomputed on every seed.
   const portRows = (await db.query("select id, lat, lon from public.ports")).rows;
-  const stationRows = (await db.query("select id, lat, lon from public.stations")).rows;
+  const stationRows = (await db.query("select id, lat, lon from public.stations where source <> 'nws'")).rows;
   await db.query("delete from public.port_stations");
+  await db.query("update public.ports set nws = null"); // the refresh job relinks NWS observation stations
   for (const p of portRows) {
     const near = stationRows
       .map((s) => ({ id: s.id, mi: distanceMi(p.lat, p.lon, s.lat, s.lon) }))

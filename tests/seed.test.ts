@@ -3,7 +3,8 @@ import { ruleSchema, thresholdSchema, SETUP_LURE_TYPES, type Condition } from "@
 import { lures } from "../seed/lures";
 import { ports } from "../seed/ports";
 import { rules } from "../seed/rules";
-import { distanceMi, stations } from "../seed/stations";
+import { distanceMi } from "../seed/geo";
+import { stations } from "../seed/stations";
 import { thresholds } from "../seed/thresholds";
 
 const thresholdNames = new Set(thresholds.map((t) => t.name));
@@ -16,11 +17,11 @@ function thresholdRefs(c: Condition): string[] {
 }
 
 describe("seed rules", () => {
-  it("holds the 19 starter rules and the 12 presentation rules, each valid and unique", () => {
+  it("holds the 19 starter rules, R20 the owner added, and the 12 presentation rules, each valid and unique", () => {
     const codes = rules.map((r) => r.code);
     expect(new Set(codes).size).toBe(codes.length);
     expect(codes.filter((c) => c.startsWith("R")).sort()).toEqual(
-      Array.from({ length: 19 }, (_, i) => `R${String(i + 1).padStart(2, "0")}`),
+      Array.from({ length: 20 }, (_, i) => `R${String(i + 1).padStart(2, "0")}`),
     );
     expect(codes.filter((c) => c.startsWith("P")).sort()).toEqual(
       Array.from({ length: 12 }, (_, i) => `P${String(i + 1).padStart(2, "0")}`),
@@ -127,8 +128,13 @@ describe("seed catalog, ports and stations", () => {
     }
   });
 
-  it("seeds the six NDBC stations the spec names", () => {
-    expect(stations.map((s) => s.external_id).sort()).toEqual(["45002", "45007", "45029", "45161", "45168", "45170"]);
+  it("seeds the Michigan-side NDBC stations the spec names, and Seagull buoys with temperature at depth", () => {
+    const ndbc = stations.filter((s) => s.source === "ndbc").map((s) => s.external_id);
+    // 45170 Michigan City is on the far side of the lake's midline from every seeded port.
+    for (const id of ["45002", "45007", "45029", "45161", "45168"]) expect(ndbc, id).toContain(id);
+    const profile = stations.filter((s) => s.source === "seagull" && s.has_temp_profile);
+    expect(profile.length).toBeGreaterThanOrEqual(5);
+    for (const s of profile) expect("params" in s.meta && s.meta.params.temps.length, s.name).toBeGreaterThanOrEqual(3);
   });
 
   it("measures distance in statute miles", () => {

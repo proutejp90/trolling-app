@@ -16,6 +16,8 @@ const TAG_WEIGHT: Record<Tag, number> = { science: 100, reports: 10, lore: 1 };
 const TAG_ORDER: Tag[] = ["science", "reports", "lore"];
 /** Used only when no rule ranks a lure type the angler has. */
 const FALLBACK_ORDER: SetupLureType[] = ["spoon", "plug", "flasher_fly", "meat_rig"];
+/** The thresholds a murky-water rule rescales: how deep each color still shows. */
+const COLOR_BANDS = ["red_max_ft", "orange_max_ft", "yellow_max_ft", "green_max_ft", "blue_max_ft"];
 const TYPE_LABEL: Record<SetupLureType, string> = { spoon: "Spoons", flasher_fly: "Flasher and fly", meat_rig: "Meat rigs", plug: "Plugs" };
 
 const fmt = (r: Range) => `${r.min.toFixed(1)} to ${r.max.toFixed(1)} mph`;
@@ -182,7 +184,7 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
     water_depth_ft: null, upwelling_likely: upwelling, spread_speed_mph: null,
     lines: context.lines_available ?? readThreshold(t, "default_lines") ?? 4,
     setups: [], finish_ranking: {}, excluded_finishes: [], dropped_types: [], dropped_lures: [],
-    attractor_size_in: null, tips: [], notes, fired, skipped,
+    attractor_size_in: null, color_band_factor: 1, tips: [], notes, fired, skipped,
   };
 
   const live = rules.filter((r) => {
@@ -461,15 +463,27 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
 
   // --- Color, per line --------------------------------------------------------
   const colorRules = stage("color");
-  const firedColor = colorRules.filter((r) => !referencesField(r.when, "finish_types") && evalCondition(r.when, fields, t).value === true);
+  // Stained water shortens how deep each color carries. A rule that says so rescales the color
+  // bands before any other color rule reads them, so it is evaluated first, on the unscaled bands.
+  let ct = t;
+  for (const r of colorRules) {
+    const name = r.recommend.scale_color_bands_by_threshold as string | undefined;
+    if (!name || evalCondition(r.when, fields, t).value !== true) continue;
+    const factor = readThreshold(t, name);
+    if (factor === null) { notes.push(`Rule ${r.code} could not rescale the color bands: threshold ${name} has no value.`); continue; }
+    ct = new Map(ct);
+    for (const band of COLOR_BANDS) {
+      const depth = readThreshold(t, band);
+      if (depth !== null) ct.set(band, depth * factor);
+    }
+    result.color_band_factor = factor;
+  }
+  const firedColor = colorRules.filter((r) => !referencesField(r.when, "finish_types") && evalCondition(r.when, fields, ct).value === true);
   firedColor.forEach((r) => fire(r));
   for (const r of colorRules) {
     if (firedColor.includes(r) || referencesField(r.when, "finish_types")) continue;
-    const v = evalCondition(r.when, fields, t);
+    const v = evalCondition(r.when, fields, ct);
     skipped.push({ code: r.code, reason: v.value === null ? v.missing ?? "an input is missing" : "condition not met" });
-  }
-  if (firedColor.some((r) => r.recommend.scale_color_bands_by_threshold)) {
-    notes.push("Stained water shortens how deep colors carry. The color depth bands are not rescaled yet; see DECISIONS.md.");
   }
   const preferSmaller = firedColor.some((r) => r.recommend.prefer_size === "smaller");
   const recordExclusions = (lure: CatalogLure, out: ColorOutcome) => {
@@ -482,7 +496,7 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
   };
   /** Ranked finishes, or the closest match and the rule it breaks when every finish is filtered out. */
   const finishesFor = (lure: CatalogLure, require: string[]) => {
-    const out = colorStage(lure, colorRules, fields, t, require);
+    const out = colorStage(lure, colorRules, fields, ct, require);
     recordExclusions(lure, out);
     if (out.ranked.length) return { ranked: out.ranked, breaks: null as string | null };
     const closest = out.excluded[0];

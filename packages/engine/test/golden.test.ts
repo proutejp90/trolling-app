@@ -44,7 +44,12 @@ describe("golden scenarios: rules R01 to R19", () => {
 
   it("G4: Sep 20, Manistee, staging, murky, low light, angler gives lure depth 15 ft", () => {
     const r = run({ date: "2026-09-20", mode: "staging", clarity: "murky", sky: "low_light", lure_depth_ft: 15 });
-    expect(codes(r)).toEqual(expect.arrayContaining(["R04", "R09", "R12", "R14", "R16", "R17"]));
+    // The owner turned murky_factor on (2026-11-27). The spec's G4 lists R09, written before the
+    // factor applied: at 0.5, red carries to 10 ft, so at 15 ft R10 fires in its place.
+    expect(codes(r)).toEqual(expect.arrayContaining(["R04", "R10", "R12", "R14", "R16", "R17"]));
+    expect(codes(r)).not.toContain("R09");
+    expect(r.color_band_factor).toBe(0.5);
+    expect(r.excluded_finishes.map((e) => e.name)).toEqual(expect.arrayContaining(["Plain red", "Plain orange"]));
     const ranking = r.finish_ranking.plug!.map((f) => finishOf(f.finish_id));
     expect(ranking[0]!.finish_types).toContain("glow");
     expect(ranking[0]!.pattern).toBe("ladderback"); // ladderback preferred
