@@ -104,13 +104,23 @@ function ConditionsSummary({ c }: { c: Conditions }) {
   );
 }
 
-function Result({ rec, portName, date, onConditions }: { rec: Recommendation; portName: string; date: string; onConditions: () => void }) {
+/** The next date the rules cover: April 1 of this year before the season, of next year after it. */
+function nextSeasonStart(date: string): string {
+  const year = Number(date.slice(0, 4));
+  return `${Number(date.slice(5, 7)) > 10 ? year + 1 : year}-04-01`;
+}
+
+function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recommendation; portName: string; date: string; onConditions: () => void; onTryDate: (date: string) => void }) {
   const result: EngineResult = rec.engine;
   if (rec.status === "out_of_season") {
+    const opening = nextSeasonStart(date);
     return (
-      <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
+      <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-surface-2 p-4">
         <h2 className="text-t3">Out of season</h2>
-        <p className="mt-2 text-fg-secondary">The rules cover April through October. Pick a date in that range to get a setup.</p>
+        <p className="text-fg-secondary">
+          {monthName(date)} is outside the season. The rules cover April through October. Go back to pick a date in that range, or see the setup for opening day.
+        </p>
+        <Button variant="primary" size="touch" onClick={() => onTryDate(opening)}>Show {monthName(opening)}</Button>
       </div>
     );
   }
@@ -280,14 +290,14 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   const depthNumber = Number(depthValue);
   const depthGiven = depthKind !== "none" && depthValue !== "" && depthNumber >= 0 && depthNumber <= 400;
 
-  const ask = useCallback(async () => {
+  const ask = useCallback(async (forDate?: string) => {
     const id = ++latest.current;
     setBusy(true);
     try {
       const res = await fetch("/api/recommend", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          port: portName, date, ...(time ? { time_of_day: time } : {}),
+          port: portName, date: forDate ?? date, ...(time ? { time_of_day: time } : {}),
           answers: {
             ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(wind ? { wind } : {}), ...(mode ? { mode } : {}), lines,
             ...(depthGiven && depthKind === "break" ? { break_depth_ft: depthNumber } : {}),
@@ -353,6 +363,7 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
         <div className="mt-auto flex flex-col gap-2">
           {errorLine}
           <Button type="submit" variant="primary" size="touch" disabled={!date || busy}>Get setup</Button>
+          <p className="text-small text-fg-tertiary">The season runs April through October.</p>
         </div>
       </form>
     );
@@ -417,7 +428,17 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   return (
     <div className="flex flex-1 flex-col gap-4">
       {back(rec?.status === "out_of_season" ? "home" : "questions")}
-      {rec ? <Result rec={rec} portName={portName} date={date} onConditions={() => setStep("conditions")} /> : null}
+      {rec ? (
+        <Result
+          rec={rec} portName={portName} date={date} onConditions={() => setStep("conditions")}
+          onTryDate={async (next) => {
+            setDate(next);
+            setAsked([]);
+            const first = await ask(next);
+            if (first && first.status !== "out_of_season") setStep("questions");
+          }}
+        />
+      ) : null}
       <p className="mt-auto border-t border-border-subtle pt-4 text-small text-fg-tertiary">{FOOTER}</p>
     </div>
   );
