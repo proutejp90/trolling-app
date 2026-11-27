@@ -2,7 +2,7 @@
 
 A mobile web app that tells a Lake Michigan salmon troller which lures to run, how deep and how fast, for a chosen port and date, and explains why. A rules engine decides; an LLM agent explains; a trolling log records every setup, including the ones that catch nothing.
 
-Status: **Phase 2, live conditions.** A scheduled job caches buoy and forecast data in Postgres, and recommendations are built from that cache, asking only what the data could not answer. The explaining agent arrives in Phase 3.
+Status: **Phase 3, agent.** An AI agent writes each recommendation's explanation from the engine's output. The server checks every sentence and falls back to templated reasons when a check fails or the agent is unavailable. Fishing reports arrive in Phase 4.
 
 ## Start from a fresh clone
 
@@ -43,6 +43,14 @@ npm run build && npm run test:e2e
 ```
 
 The flow tests need the database: they load the recorded autumn fixtures into the cache first.
+
+## Agent evals
+
+```bash
+ANTHROPIC_API_KEY=... npm run evals
+```
+
+This calls the Anthropic API for each of the 32 contexts in `evals/contexts.ts` and grades the answers against the spec's pass bars. It costs money and is not part of `npm test`.
 
 ## Refreshing conditions
 

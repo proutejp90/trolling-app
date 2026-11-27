@@ -146,8 +146,42 @@ Found against the live APIs on 2026-11-27 and reported to the owner.
 - The Netlify scheduled function is written but untested until the site is deployed.
 - Fixtures were recorded in late November, when most buoys were pulled. The July profile fixture is assembled from real archive readings because the live API can no longer serve July.
 
+## Phase 3: agent
+
+### How "the engine decides and the LLM explains" is enforced
+
+The spec has the agent return the whole recommendation as JSON and the server compare every lure, depth and speed with the engine's. This build goes one step further: **the agent never returns those fields at all.** It returns words only (a summary, reasons with rule codes, report notes, a confidence reason, caveats), and the server attaches the engine's lures, finishes, depths, speeds and evidence tags. A wrong number in a structured field is impossible, not just detected.
+
+What can still go wrong is the prose, so the server checks it and rejects the whole answer on any failure:
+
+| Check | Why |
+|---|---|
+| Every number in the text is one the engine or the cached conditions produced | "Never invents a depth or speed" |
+| A lure type, color or finish word appears only where the engine put it, or in the text of a rule cited in that same reason | "Never invents a color or lure" |
+| Every rule code fired and shaped that lure type; one reason never mixes rules with different evidence tags | Tags are attached by the server from the rules, so a reason must map to one tag |
+| No promise of a catch; no safety, weather or navigation advice; no exclamation marks | Product principles |
+| A report note cites only a report that was provided | Reports are untrusted data |
+
+One retry tells the model what was rejected. After a second failure, a refusal, an error or 12 seconds, the templated explanation is shown and the angler sees no error.
+
+### Choices
+
+| Decision | Why |
+|---|---|
+| One structured-output call, no tools | The spec lists five tools "so the agent can re-run with an answer to its follow-up question". Here the route computes the unanswered questions in code and the screen re-posts with the answers, so the agent has nothing to fetch. One call also meets the cost target. Tools can be added when the predictive model arrives (Phase 7). |
+| `needs_input` is decided in code, not by the agent | Whether clarity "changes the result" is testable: the engine is run once per clarity and the spreads compared. The agent is only called once every question is answered. The spec's second worked example (a `needs_input` case) is replaced by a no-live-data case with a conflicting, instruction-bearing report. |
+| The engine result and templated reasons come back first; `POST /api/explain` swaps in the agent's words | "Show the engine result immediately." The explain route rebuilds the recommendation from the same inputs, so nothing the browser sends is trusted as engine output. |
+| Explanations are cached 30 minutes by port, date, hour and answers, in the `recommendations` table | The spec's cost target. Serverless instances share no memory, so the cache is in Postgres. |
+| Model `claude-opus-5-5` by default, from `ANTHROPIC_MODEL`; effort `low`; system prompt cached | The model name is an env var as the spec asks. Low effort suits a short, tightly specified writing task and the 6 second target. The owner can pick a cheaper model by setting the variable. |
+| No server-side refusal fallback to another model | The templated explanation is the fallback for every failure, including a refusal. |
+| The prompt version (`PROMPT_VERSION`) and model are stored with each recommendation | Spec. |
+| Eval results are committed under `evals/results/<prompt version>.json` | "Store results with the prompt version." |
+
+### Not yet verified
+
+The eval suite (32 contexts) and the latency target need a real API key and have **not been run**. Everything else is covered by tests with a stubbed model. The CI eval job runs only when agent, rule or prompt files change and an `ANTHROPIC_API_KEY` repository secret exists; without the secret it warns and skips.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).
-- Current Anthropic model ids and the tool-use and structured-output features to rely on (Phase 3).
 - Rule version history for the admin screen: `rules.version` exists; a history table arrives with the editor in Phase 6.

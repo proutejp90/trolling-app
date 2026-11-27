@@ -8,7 +8,8 @@ import type { QuestionField, Recommendation } from "@/server/recommend";
 import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Choice } from "@/components/ui/choice";
-import { FOOTER, KNOWN_LIMITS, REASONS, SPEED_CAVEAT, TAG_EXPLAINER, TYPE_NAME, TYPE_SPEED_REASON } from "@/lib/reasons";
+import { FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
+import type { Explanation, Reason } from "@/server/agent/schema";
 
 type Step = "home" | "questions" | "result" | "conditions";
 type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
@@ -36,11 +37,8 @@ function Tags({ tags }: { tags: Tag[] }) {
   );
 }
 
-function SetupCard({ type, setups, result }: { type: SetupLureType; setups: Setup[]; result: EngineResult }) {
+function SetupCard({ type, setups, reasons }: { type: SetupLureType; setups: Setup[]; reasons: Reason[] }) {
   const first = setups[0]!;
-  const tagsOf = new Map(result.fired.map((f) => [f.code, f.tags]));
-  const reasonCodes = [...new Set(setups.flatMap((s) => s.rule_codes))].filter((c) => REASONS[c]);
-  const speedReason = type === "plug" ? null : TYPE_SPEED_REASON[type];
   return (
     <section className="rounded-md border border-border-subtle bg-surface-2 p-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -76,18 +74,12 @@ function SetupCard({ type, setups, result }: { type: SetupLureType; setups: Setu
       <details className="mt-3">
         <summary className="flex min-h-touch cursor-pointer items-center text-fg-secondary">Why this setup</summary>
         <ul className="flex flex-col gap-3 pb-1">
-          {reasonCodes.map((code) => (
-            <li key={code} className="flex items-start gap-3">
-              <Tags tags={tagsOf.get(code) ?? ["lore"]} />
-              <span className="text-fg-secondary">{REASONS[code]}</span>
+          {reasons.map((r) => (
+            <li key={r.text} className="flex items-start gap-3">
+              <Tags tags={r.tags} />
+              <span className="text-fg-secondary">{r.text}</span>
             </li>
           ))}
-          {speedReason ? (
-            <li className="flex items-start gap-3">
-              <Tags tags={speedReason.tags} />
-              <span className="text-fg-secondary">{speedReason.text}</span>
-            </li>
-          ) : null}
         </ul>
       </details>
     </section>
@@ -110,7 +102,7 @@ function nextSeasonStart(date: string): string {
   return `${Number(date.slice(5, 7)) > 10 ? year + 1 : year}-04-01`;
 }
 
-function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recommendation; portName: string; date: string; onConditions: () => void; onTryDate: (date: string) => void }) {
+function Result({ rec, explanation, portName, date, onConditions, onTryDate }: { rec: Recommendation; explanation: Explanation; portName: string; date: string; onConditions: () => void; onTryDate: (date: string) => void }) {
   const result: EngineResult = rec.engine;
   if (rec.status === "out_of_season") {
     const opening = nextSeasonStart(date);
@@ -136,7 +128,7 @@ function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recomme
       <div>
         <h2 className="text-t2">{portName}, {monthName(date)}</h2>
         <p className="mt-1 text-fg-secondary">
-          {REASONS[result.fired.find((f) => f.stage === "location")?.code ?? ""]}
+          {explanation.conditions_summary}
           {result.mode === "staging" ? " This setup is for staging fish." : " This setup is for offshore fish."}
           {result.water_depth_ft ? ` Fish over ${result.water_depth_ft.min} to ${result.water_depth_ft.max} ft of water.` : ""}
         </p>
@@ -144,7 +136,7 @@ function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recomme
       <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3">
         <div className="flex items-start gap-3">
           <Badge tone={confidence.tone}>{confidence.label}</Badge>
-          <p className="text-fg-secondary">{rec.confidence_reason}</p>
+          <p className="text-fg-secondary">{explanation.confidence_reason}</p>
         </div>
         <ConditionsSummary c={c} />
         <p className="text-fg-secondary">
@@ -161,7 +153,20 @@ function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recomme
           <p className="text-small text-fg-tertiary">at the lure, on {result.setups.length} {result.setups.length === 1 ? "line" : "lines"}</p>
         </div>
       ) : null}
-      {groups.map((g) => <SetupCard key={g.type} type={g.type} setups={g.setups} result={result} />)}
+      {groups.map((g) => <SetupCard key={g.type} type={g.type} setups={g.setups} reasons={explanation.groups.find((x) => x.lure_type === g.type)?.reasons ?? []} />)}
+      {explanation.report_notes.length ? (
+        <section>
+          <h3 className="text-t3">Recent reports</h3>
+          <ul className="mt-2 flex flex-col gap-3">
+            {explanation.report_notes.map((n) => (
+              <li key={n.text} className="flex items-start gap-3">
+                <Badge tone={n.agrees ? "success" : "warning"}>{n.agrees ? "Agrees" : "Conflicts"}</Badge>
+                <span className="text-fg-secondary">{n.text} <span className="text-fg-tertiary">Michigan DNR, {monthName(n.report_date)}.</span></span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {result.setups.length === 0 ? (
         <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
           <h3 className="text-t3">No setup fits</h3>
@@ -192,7 +197,7 @@ function Result({ rec, portName, date, onConditions, onTryDate }: { rec: Recomme
         </section>
       ) : null}
       <section className="text-small text-fg-tertiary">
-        <p>{SPEED_CAVEAT}</p>
+        {explanation.caveats.map((c) => <p key={c} className="mb-1">{c}</p>)}
         <ul className="mt-2 flex list-disc flex-col gap-1 pl-5">{KNOWN_LIMITS.map((l) => <li key={l}>{l}</li>)}</ul>
       </section>
     </div>
@@ -282,6 +287,7 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   const [asked, setAsked] = useState<QuestionField[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agentExplanation, setAgentExplanation] = useState<{ for: string; explanation: Explanation } | null>(null);
   const latest = useRef(0);
 
   // Today's date is set on the device so the page carries no stale date.
@@ -323,6 +329,30 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
 
   // Each answer can settle other questions (the forecast may cover the chosen time), so ask again as answers change.
   useEffect(() => { if (step === "questions") void ask(); }, [step, ask]);
+
+  // The engine result shows at once with templated reasons. The agent's explanation replaces them when it
+  // arrives; if it never does, nothing on screen changes and no error is shown.
+  const recKey = rec?.recommendation_id ?? null;
+  useEffect(() => {
+    if (step !== "result" || !rec || !rec.agent_available || !recKey || agentExplanation?.for === recKey) return;
+    const controller = new AbortController();
+    fetch("/api/explain", {
+      method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({
+        port: portName, date, ...(time ? { time_of_day: time } : {}), recommendation_id: recKey,
+        answers: {
+          ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(wind ? { wind } : {}), ...(mode ? { mode } : {}), lines,
+          ...(depthGiven && depthKind === "break" ? { break_depth_ft: depthNumber } : {}),
+          ...(depthGiven && depthKind === "lure" ? { lure_depth_ft: depthNumber } : {}),
+        },
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => { if (body?.explanation) setAgentExplanation({ for: recKey, explanation: body.explanation as Explanation }); })
+      .catch(() => undefined);
+    return () => controller.abort();
+    // The answers are fixed while the result is on screen, so the recommendation id is the only trigger.
+  }, [step, recKey]);
 
   const needsDepth = rec?.questions.includes("depth") ?? false;
   const ready = rec?.status === "ok" && !busy;
@@ -430,7 +460,8 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
       {back(rec?.status === "out_of_season" ? "home" : "questions")}
       {rec ? (
         <Result
-          rec={rec} portName={portName} date={date} onConditions={() => setStep("conditions")}
+          rec={rec} explanation={agentExplanation && agentExplanation.for === recKey ? agentExplanation.explanation : rec.explanation}
+          portName={portName} date={date} onConditions={() => setStep("conditions")}
           onTryDate={async (next) => {
             setDate(next);
             setAsked([]);
