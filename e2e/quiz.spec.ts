@@ -16,7 +16,7 @@ async function start(page: Page, date: string, port = "Muskegon") {
 async function answer(page: Page, opts: { where?: string } = {}) {
   await page.getByText("Daytime", { exact: true }).click();
   await page.getByText("Clear", { exact: true }).click();
-  await page.getByText("Bright", { exact: true }).click(); // appears once the time is known and no forecast covers it
+  await page.getByText("Bright", { exact: true }).click(); // asked from the start: no forecast covers these dates
   await page.getByText("Breezy or more", { exact: true }).click();
   if (opts.where) await page.getByText(opts.where, { exact: true }).click();
 }
@@ -96,5 +96,68 @@ test.describe("recommendation flow", () => {
   test("a January date offers this year's opening day", async ({ page }) => {
     await start(page, "2026-01-15");
     await expect(page.getByRole("button", { name: "Show April 1" })).toBeVisible();
+  });
+
+  test("every screen opens at the top with its heading focused", async ({ page }) => {
+    const atTop = async (heading: string) => {
+      await expect(page.getByRole("heading", { name: heading })).toBeFocused();
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    };
+    await start(page, "2026-11-27");
+    await atTop("Out of season");
+    await page.getByRole("button", { name: "Show April 1" }).click();
+    await atTop("Muskegon, April 1");
+    await answer(page);
+    const show = page.getByRole("button", { name: "Show setup" });
+    await show.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    await show.click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+    await atTop("Muskegon, April 1");
+    await page.getByRole("button", { name: "View conditions" }).scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await atTop("Conditions at Muskegon");
+    await page.getByRole("button", { name: "Back" }).click();
+    await atTop("Muskegon, April 1");
+  });
+
+  for (const date of ["2026-04-01", "2026-07-15"]) {
+    test(`${date}: every question is there on the first render and picking a time moves nothing`, async ({ page }) => {
+      await start(page, date);
+      for (const legend of ["Time on the water", "Water clarity", "Sky", "Wind", "Depth"]) await expect(page.getByRole("group", { name: legend, exact: true })).toBeVisible();
+      await expect(page.getByRole("group", { name: "Lines" })).toBeVisible();
+      // Where things sit on the page, not in the window, so scrolling does not count as moving.
+      const place = async (text: string) => {
+        const box = (await page.getByText(text, { exact: true }).boundingBox())!;
+        const scrollY = await page.evaluate(() => window.scrollY);
+        return { x: box.x + box.width / 2, y: box.y + scrollY + box.height / 2 };
+      };
+      const overcast = await place("Overcast");
+      const showSetup = await place("Show setup");
+      const settled = page.waitForResponse((r) => r.url().includes("/api/recommend") && (r.request().postData() ?? "").includes("time_of_day"));
+      await page.getByText("Daytime", { exact: true }).click();
+      await settled;
+      await page.getByText("Clear", { exact: true }).click();
+      expect(await place("Show setup")).toEqual(showSetup);
+      // Tap where Overcast was on the first render.
+      await page.getByText("Overcast", { exact: true }).scrollIntoViewIfNeeded();
+      await page.mouse.click(overcast.x, overcast.y - (await page.evaluate(() => window.scrollY)));
+      await expect(page.getByRole("radio", { name: "Overcast" })).toBeChecked();
+    });
+
+    test(`${date}: the summary names no fishing location the angler did not choose`, async ({ page }) => {
+      await start(page, date);
+      await answer(page);
+      await page.getByRole("button", { name: "Show setup" }).click();
+      await expect(page.getByText("Run the whole spread at")).toBeVisible();
+      await expect(page.getByText(/This setup is for (offshore|staging) fish/)).toHaveCount(0);
+    });
+  }
+
+  test("an August trip near the river mouth says the setup is for staging fish", async ({ page }) => {
+    await start(page, "2026-08-15");
+    await answer(page, { where: "Near the river mouth" });
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("This setup is for staging fish.")).toBeVisible();
   });
 });

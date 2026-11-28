@@ -31,6 +31,8 @@ export interface Conditions {
   wind_history: { hours_ago: number; dir_deg: number }[];
   wind_station: string | null;
   forecast: { valid_at: string; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; hazards: { phenomenon: string; significance: string }[] } | null;
+  /** True when a cached forecast hour falls near any of the four times of day on the trip date. */
+  forecast_covers_date: boolean;
   sky: EngineContext["sky"] | null;
   wind_calm: boolean | null;
   light_period: EngineContext["light_period"] | null;
@@ -178,6 +180,9 @@ export function buildConditions(input: {
       messages.push("No forecast covers that time, so sky and wind come from your answers.");
     }
   }
+  // Known before a time is chosen, so sky and wind can be asked on the first screen instead of appearing later.
+  const possibleTrips = sun ? Object.values(TIME_OFFSET).map((o) => sun[o.from].getTime() + o.hours * 3_600_000) : [];
+  const forecastCoversDate = input.forecasts.some((f) => possibleTrips.some((t) => Math.abs(f.valid_at.getTime() - t) <= 90 * 60_000));
   // In the dark, light is low whatever the cloud cover.
   if (light === "before_sunrise" || light === "after_sunset") sky = "low_light";
 
@@ -188,7 +193,7 @@ export function buildConditions(input: {
     temp_station: source ? { name: source.station_name, source: source.source, distance_mi: Number(source.distance_mi) } : null,
     observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : null,
     stale: source ? !fresh(source) : false,
-    wind_history: windHistory, wind_station: windStation, forecast, sky, wind_calm: windCalm,
+    wind_history: windHistory, wind_station: windStation, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
     light_period: light, hours_after_sunrise: hoursAfterSunrise, sunrise: sun?.sunrise.toISOString() ?? null, sunset: sun?.sunset.toISOString() ?? null,
     messages, readings,
   };

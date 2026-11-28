@@ -181,6 +181,16 @@ One retry tells the model what was rejected. After a second failure, a refusal, 
 
 The eval suite (32 contexts) and the latency target need a real API key and have **not been run**. Everything else is covered by tests with a stubbed model. The CI eval job runs only when agent, rule or prompt files change and an `ANTHROPIC_API_KEY` repository secret exists; without the secret it warns and skips.
 
+## UI review fixes, Part A
+
+Source: `docs/UI-REVIEW-FIXES.md`.
+
+- **"A forecast covers part of the date"** means a cached forecast hour sits within 90 minutes of any of the four times of day the angler can pick (the same window the trip-time lookup uses). It is `forecast_covers_date` on the conditions. With no database connected it is always false, so sky and wind are asked at once.
+- **In the dark, a sky answer is not used.** Sky is now on screen before the time is chosen, so an angler can answer "Bright" and then pick "Before sunrise". Before sunrise and after sunset the light is low whatever was answered, and the result says the sky came from the time of day. The question stays on screen (a question once asked stays) with the hint "Not used in the dark: light is low." Before this change the answer won, which only happened if the angler changed the time after answering.
+- **Focus on a new screen** goes to the element marked `data-screen-heading`. The first page load is left alone, so the browser's own focus order applies there. The result and conditions headings are still `h2`; Part C4 makes them `h1`.
+- **A question counts as added late** when it arrives after the first answer for that port and date. Late questions fade in and are announced together ("Added: Sky, Wind"). The fade-in path only runs when a forecast covers part of the date, which none of the recorded in-season fixtures do, so it is not covered by a browser test.
+- **The offshore or staging sentence** shows when the "Where are you fishing" question was on screen, which today is August only.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).

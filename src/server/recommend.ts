@@ -73,7 +73,9 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     : buildConditions({ port, date: input.date, timeOfDay: input.time_of_day ?? null, now: deps.now, observations: [], forecasts: [], thresholds: ruleset.thresholds, connected: false });
 
   // The angler's answer beats the forecast: they are looking at the sky.
-  const sky = a.sky ?? conditions.sky ?? undefined;
+  // The one exception is the dark: before sunrise and after sunset the light is low whatever was answered.
+  const dark = conditions.light_period === "before_sunrise" || conditions.light_period === "after_sunset";
+  const sky = dark ? "low_light" : a.sky ?? conditions.sky ?? undefined;
   const windCalm = a.wind ? a.wind === "calm" : conditions.wind_calm ?? undefined;
   const useAnglerBreak = conditions.temp_source_level !== 1 && a.break_depth_ft !== undefined;
   const level = conditions.temp_source_level === 1 ? 1 : useAnglerBreak ? 4 : conditions.temp_source_level;
@@ -102,8 +104,11 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   if (engine.status !== "out_of_season") {
     if (!input.time_of_day) questions.push("time_of_day");
     if (!a.clarity && (clarityMatters || engine.status !== "ok")) questions.push("clarity");
-    if (!sky && input.time_of_day) questions.push("sky");
-    if (windCalm === undefined && input.time_of_day) questions.push("wind");
+    // With a forecast for part of the date, sky and wind wait for the time: the forecast may answer them.
+    // With none, they are asked at once, so nothing is added to the form after the angler starts tapping.
+    const knowWhetherToAsk = Boolean(input.time_of_day) || !conditions.forecast_covers_date;
+    if (!sky && knowWhetherToAsk) questions.push("sky");
+    if (windCalm === undefined && knowWhetherToAsk) questions.push("wind");
     if (month === 8 && !a.mode) questions.push("mode");
     if (engine.status === "needs_input") questions.push("depth");
   }
@@ -137,7 +142,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   return {
     status, questions, engine, conditions, temp_source_level: level,
     sources: {
-      sky: a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
+      sky: dark ? "time of day" : a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
       wind: a.wind ? "you" : conditions.wind_calm !== null ? "forecast" : null,
       depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
     },
