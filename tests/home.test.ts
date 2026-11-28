@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkDate, defaultDate, nearestFirst, nextSeasonStart } from "../src/lib/home";
+import { addDays, checkDate, dayStrip, defaultDate, nearestFirst, nextSeasonStart, todayAt } from "../src/lib/home";
 
 describe("default date on Home", () => {
   it("is today in season", () => {
@@ -43,5 +43,20 @@ describe("nearest port first", () => {
     const sorted = nearestFirst(ports, { lat: 43.06, lon: -86.23 });
     expect(sorted.map((p) => p.name)).toEqual(["Grand Haven", "Muskegon", "South Haven", "Ludington"]);
     expect(ports[0]!.name).toBe("South Haven");
+  });
+});
+
+describe("day strip", () => {
+  it("G39: today is the date at the port", () => {
+    const halfPastMidnightEastern = new Date("2026-07-16T04:30:00Z");
+    expect(todayAt("America/Detroit", halfPastMidnightEastern)).toBe("2026-07-16");
+    expect(todayAt("America/Chicago", halfPastMidnightEastern)).toBe("2026-07-15");
+  });
+  it("lists today, tomorrow and the next five days, across a month end", () => {
+    expect(dayStrip("2026-07-29")).toEqual([
+      { date: "2026-07-29", label: "Today" }, { date: "2026-07-30", label: "Tomorrow" }, { date: "2026-07-31", label: "Fri 31" },
+      { date: "2026-08-01", label: "Sat 1" }, { date: "2026-08-02", label: "Sun 2" }, { date: "2026-08-03", label: "Mon 3" }, { date: "2026-08-04", label: "Tue 4" },
+    ]);
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
   });
 });

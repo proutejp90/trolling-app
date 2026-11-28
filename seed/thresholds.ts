@@ -52,11 +52,14 @@ export const thresholds: Threshold[] = [
   t("obs_fresh_hours", 3, "h", "Observations must be newer than this for high confidence."),
   t("report_max_age_days", 21, "d", "Reports older than this are ignored."),
   t("obs_max_age_hours", 24, "h", "Buoy readings older than this are not used at all.", true),
-  t("trip_max_days_ahead", 2, "d", "Buoy readings are used only for trips within this many days of now.", true),
 
   // Reading the forecast
   t("sky_overcast_min_pct", 70, "%", "Forecast sky cover at or above this counts as overcast; below it, bright.", true),
-  t("wind_calm_max_mph", 6, "mph", "Forecast wind at or below this counts as calm for P07.", true),
+  t("lines_default", 4, "lines", "Lines a spread assumes until the angler says otherwise.", true),
+  t("wind_calm_max_kt", 5, "kt", "Wind at or below this counts as calm for P07, from a buoy today or the forecast otherwise.", true),
+  t("low_light_minutes", 45, "min", "Light is low this long either side of sunrise and sunset.", true),
+  t("forecast_horizon_days", 5, "d", "Forecasts are used for trips up to this many days ahead. Beyond it, month defaults.", true),
+  t("clarity_answer_max_age_days", 3, "d", "An angler's clarity answer at a port is offered again for this many days.", true),
 
   // The forecast panel
   t("forecast_stale_hours", 3, "h", "A forecast fetched longer ago than this is marked stale on the forecast panel."),

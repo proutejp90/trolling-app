@@ -76,7 +76,7 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     await storeReadings(db, station, hourly(parseSeagullObs(fixture.body, metas).get(62)!));
 
     const r = await recommend({ port: "Ludington", date: "2026-07-15", time_of_day: "day", answers: { clarity: "clear", sky: "bright", wind: "breezy" } }, { db, now });
-    expect(r).toMatchObject({ status: "ok", temp_source_level: 1, confidence: "medium" });
+    expect(r).toMatchObject({ status: "ok", temp_source_level: 1, confidence: "high" }); // a buoy profile read minutes ago
     expect(r.conditions.temp_station).toMatchObject({ name: "Ludington buoy", source: "seagull" });
     expect(r.conditions.age_minutes).toBe(0);
     expect(r.conditions.temp_profile!.length).toBeGreaterThanOrEqual(8);
@@ -90,7 +90,7 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     expect(r.engine.depth_ft!.min).toBeLessThanOrEqual(p[below]!.depth_ft);
     expect(r.engine.depth_ft!.max - r.engine.depth_ft!.min).toBe(20);
     expect(r.sources.depth).toBe("the Ludington buoy temperature profile");
-    expect(r.confidence_reason).toMatch(/^Depth comes from a buoy's temperature profile\. No recent fishing report/);
+    expect(r.confidence_reason).toBe("Depth comes from a buoy's temperature profile.");
     // The buoy's own wind feeds the upwelling rule.
     expect(r.conditions.wind_station).toBe("Ludington buoy");
   });
@@ -102,10 +102,12 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     expect(summary.forecasts).toHaveLength(10);
     const ruleset = await loadRuleset(db);
     const port = ruleset.ports.find((p) => p.name === "Muskegon")!;
-    const c = await loadConditions(db, port, "2026-11-28", "day", new Date(now), ruleset.thresholds);
+    // Today at the port, towards evening: the forecast covers it, and wind history applies to today only.
+    const c = await loadConditions(db, port, "2026-11-27", "evening", new Date(now), ruleset.thresholds);
     expect(c.forecast).not.toBeNull();
-    expect(["bright", "overcast"]).toContain(c.sky);
+    expect(c).toMatchObject({ sky: "low_light", sky_source: "Forecast", is_today: true });
     expect(typeof c.wind_calm).toBe("boolean");
+    expect(["Measured", "Forecast"]).toContain(c.wind_source);
     expect(c.wind_station).not.toBeNull(); // an airport or shore station, since the buoy's wind sensor is gone
     // Late November is out of season: the engine says so and nothing is asked.
     const r = await recommend({ port: "Muskegon", date: "2026-11-28" }, { db, now: new Date(now) });
@@ -175,16 +177,98 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     await refresh("winter", "2026-08-10T14:00:00Z");
     const now = new Date("2026-08-10T14:00:00Z");
     const first = await recommend({ port: "Muskegon", date: "2026-08-10" }, { db, now });
-    // No forecast covers any part of the date, so sky and wind are asked at once and nothing is added later.
-    expect(first.questions).toEqual(["time_of_day", "clarity", "sky", "wind", "mode"]);
-    expect(first.conditions.forecast_covers_date).toBe(false);
+    // The time is never asked: today is now. No forecast and no buoy wind, so sky and wind are.
+    expect(first.questions).toEqual(["clarity", "sky", "wind", "mode"]);
+    expect(first.day).toMatchObject({ is_today: true, kind: "today", time_window: "now" });
     const second = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore" } }, { db, now });
     expect(second.questions).toEqual(["wind"]); // before sunrise the light is low; no forecast, so wind is asked
     expect(second.sources.sky).toBe("time of day");
-    // In the dark the light is low whatever the angler said about the sky earlier.
+    // The angler's change always wins, even over the time of day, and is marked as theirs.
     const dark = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore", sky: "bright", wind: "calm" } }, { db, now });
-    expect(dark.sources.sky).toBe("time of day");
-    expect(dark.engine).toEqual((await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore", wind: "calm" } }, { db, now })).engine);
+    expect(dark.sources.sky).toBe("you");
+    expect(dark.prefilled.find((p) => p.field === "sky")).toEqual({ field: "sky", value: "bright", source: "Your answer", data_value: "low_light", data_source: "Default" });
+  });
+
+  describe("day selection and prefilled conditions", () => {
+    const now = new Date("2026-07-15T14:00:00Z"); // 10 a.m. at the port
+    const forecastToday = async (skyPct: number, windMs: number) => {
+      const port = (await db.query("select id from public.ports where name = 'Muskegon'")).rows[0].id;
+      await db.query(
+        `insert into public.forecasts (port_id, valid_at, fetched_at, sky_cover_pct, wind_dir_deg, wind_speed_ms)
+         select $1, g, $2, $3, 200, $4 from generate_series(timestamptz '2026-07-15T04:00:00Z', timestamptz '2026-07-19T03:00:00Z', interval '1 hour') g`,
+        [port, now, skyPct, windMs],
+      );
+    };
+    const field = (r: Awaited<ReturnType<typeof recommend>>, f: string) => r.prefilled.find((p) => p.field === f);
+
+    it("G34, G41, G44: today loads with no time chosen, sky and wind prefilled, and clarity the only question", async () => {
+      await forecastToday(15, 1.5);
+      const r = await recommend({ port: "Muskegon", date: "2026-07-15" }, { db, now });
+      expect(r.day).toMatchObject({ is_today: true, kind: "today", time_window: "now", updated_at: now.toISOString() });
+      expect(field(r, "sky")).toMatchObject({ value: "bright", source: "Forecast" });
+      expect(field(r, "wind")).toMatchObject({ value: "calm", source: "Forecast" });
+      expect(field(r, "lines")).toMatchObject({ value: 4, source: "Default" });
+      expect(field(r, "time_window")).toMatchObject({ value: "now", source: "Default" });
+      expect(r.questions).toEqual(["clarity"]);
+    });
+
+    it("G42, G43: an answer wins, is marked as the angler's, and is stored with what it replaced; without it the data returns", async () => {
+      await forecastToday(15, 1.5);
+      const changed = await recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "clear", sky: "overcast" } }, { db, now });
+      expect(changed.status).toBe("ok");
+      expect(field(changed, "sky")).toEqual({ field: "sky", value: "overcast", source: "Your answer", data_value: "bright", data_source: "Forecast" });
+      expect(changed.inputs.sky).toBe("overcast");
+      const stored = (await db.query("select context from public.recommendations where id = $1", [changed.recommendation_id])).rows[0].context;
+      expect(stored.overrides).toEqual([{ field: "sky", answer: "overcast", replaced: "bright", replaced_source: "Forecast" }]);
+      // Reset: the same request without the answer is the data default again.
+      const reset = await recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "clear" } }, { db, now });
+      expect(field(reset, "sky")).toMatchObject({ value: "bright", source: "Forecast" });
+      expect((await db.query("select context from public.recommendations where id = $1", [reset.recommendation_id])).rows[0].context.overrides).toEqual([]);
+      // An answer that matches the data is not an override.
+      expect(field(await recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "clear", sky: "bright" } }, { db, now }), "sky")).toMatchObject({ source: "Forecast" });
+    });
+
+    it("G45: a remembered clarity answer is labeled as the angler's last answer", async () => {
+      await forecastToday(15, 1.5);
+      const r = await recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "stained", lines: 6 }, remembered: ["clarity", "lines"] }, { db, now });
+      expect(field(r, "lines")).toMatchObject({ value: 6, source: "Your last answer" });
+      expect(r.questions).toEqual(["clarity"]); // no date came with the clarity answer, so it cannot be trusted as recent
+      expect(field(r, "clarity")).toMatchObject({ value: null, source: null });
+      const at = (daysAgo: number) => recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "stained" }, remembered: ["clarity"], clarity_answered_at: new Date(now.getTime() - daysAgo * 86_400_000).toISOString() }, { db, now });
+      expect((await at(1)).questions).toEqual([]);
+      expect(field(await at(1), "clarity")).toMatchObject({ value: "stained", source: "Your last answer" });
+      expect((await at(3)).questions).toEqual([]); // at the limit
+      expect((await at(3.1)).questions).toEqual(["clarity"]);
+    });
+
+    it("G35: three days ahead uses that day's forecast at first light, with confidence no higher than medium", async () => {
+      await forecastToday(80, 6);
+      const r = await recommend({ port: "Muskegon", date: "2026-07-18", answers: { clarity: "clear" } }, { db, now });
+      expect(r.day).toMatchObject({ is_today: false, kind: "forecast", time_window: "first_light", days_to_trip: 3 });
+      expect(field(r, "sky")).toMatchObject({ value: "low_light", source: "Forecast" }); // G46
+      expect(field(r, "wind")).toMatchObject({ value: "breezy", source: "Forecast" });
+      expect(["low", "medium"]).toContain(r.confidence);
+      expect(r.conditions.messages[0]).toBe("Buoy readings apply to today only. Results use month defaults.");
+      // A window the angler picks is theirs.
+      const midday = await recommend({ port: "Muskegon", date: "2026-07-18", time_window: "midday", answers: { clarity: "clear" } }, { db, now });
+      expect(field(midday, "time_window")).toMatchObject({ value: "midday", source: "Your answer", data_value: "first_light" });
+      expect(field(midday, "sky")).toMatchObject({ value: "overcast", source: "Forecast" });
+    });
+
+    it("G36: eight days ahead uses month defaults, says the forecasts do not reach, and is low confidence", async () => {
+      await forecastToday(15, 1.5);
+      const r = await recommend({ port: "Muskegon", date: "2026-07-23", time_window: "midday", answers: { clarity: "clear", sky: "bright", wind: "calm" } }, { db, now });
+      expect(r.day).toMatchObject({ kind: "beyond", days_to_trip: 8 });
+      expect(r.conditions.messages[0]).toBe("Forecasts do not reach 8 days ahead. Results use month defaults.");
+      expect(r).toMatchObject({ status: "ok", confidence: "low", temp_source_level: 5 });
+    });
+
+    it("G47: with no forecast in daylight, sky is asked and nothing is shown as measured", async () => {
+      const r = await recommend({ port: "Muskegon", date: "2026-07-15", answers: { clarity: "clear" } }, { db, now });
+      expect(r.questions).toEqual(["sky", "wind"]);
+      expect(r.prefilled.filter((p) => p.source === "Measured")).toEqual([]);
+      expect(field(r, "sky")).toMatchObject({ value: null, source: null });
+    });
   });
 
   it("one failing station does not stop the cycle", async () => {

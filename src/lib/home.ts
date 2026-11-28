@@ -25,7 +25,26 @@ export function checkDate(value: string, today: string): string | null {
   return year < thisYear - 1 || year > thisYear + 2 ? `Pick a date between ${thisYear - 1} and ${thisYear + 2}.` : null;
 }
 
-export interface PortOption { name: string; state: string; lat: number; lon: number }
+export interface PortOption { name: string; state: string; lat: number; lon: number; time_zone?: string }
+
+/** Today's date at the port, as YYYY-MM-DD. The day rolls over at the port's midnight, not the phone's. */
+export const todayAt = (timeZone: string, now = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+
+/** A date some days after another, both as YYYY-MM-DD. */
+export function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** The day strip: today, tomorrow and the next five days at the port. */
+export function dayStrip(today: string): { date: string; label: string }[] {
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(today, i);
+    const label = i === 0 ? "Today" : i === 1 ? "Tomorrow" : `${new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })} ${Number(date.slice(8))}`;
+    return { date, label };
+  });
+}
 
 export function nearestFirst<P extends PortOption>(ports: readonly P[], here: { lat: number; lon: number }): P[] {
   return [...ports].sort((a, b) => distanceMi(here.lat, here.lon, a.lat, a.lon) - distanceMi(here.lat, here.lon, b.lat, b.lon));

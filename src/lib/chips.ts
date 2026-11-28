@@ -18,12 +18,12 @@ export const isStale = (ageMinutes: number, staleHours: number) => ageMinutes > 
 interface ChipInput {
   water: { temp_f: number | null; has_station: boolean };
   inputs: { sky: string | null; wind_calm: boolean | null; clarity: string | null };
-  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "you" | null; depth_kind: "buoy" | "break" | "lure" | "default" | null };
+  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "buoy" | "you" | null; depth_kind: "buoy" | "break" | "lure" | "default" | null };
   upwelling: boolean;
 }
 
 const WHO: Record<string, { word: string; tone: ChipTone }> = {
-  you: { word: "you", tone: "neutral" }, forecast: { word: "forecast", tone: "accent" }, "time of day": { word: "time of day", tone: "neutral" },
+  you: { word: "you", tone: "neutral" }, buoy: { word: "buoy", tone: "info" }, forecast: { word: "forecast", tone: "accent" }, "time of day": { word: "time of day", tone: "neutral" },
 };
 const DEPTH: Record<string, Chip> = {
   buoy: { text: "Depth · buoy", tone: "info" }, break: { text: "Depth · your break", tone: "neutral" },

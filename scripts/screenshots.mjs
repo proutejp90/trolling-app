@@ -11,33 +11,31 @@ const run = async () => {
       await page.addInitScript((t) => globalThis.localStorage.setItem("theme", t), theme);
       await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
       const shot = (name) => page.screenshot({ path: `${out}/${name}-${width}-${theme}.png`, fullPage: true });
+      const pick = (legend, option) => page.getByRole("group", { name: legend, exact: true }).getByText(option, { exact: true }).click();
       await page.goto(base);
       await page.waitForLoadState("networkidle");
-      await shot("home");
-      for (const [name, date] of [["april-1", "2027-04-01"], ["july-15", "2027-07-15"]]) {
-        await page.goto(base);
-        await page.waitForLoadState("networkidle");
-        await page.getByLabel("Date").fill(date);
-        await page.getByRole("button", { name: "Get setup" }).click();
-        await page.getByText("Daytime", { exact: true }).click();
-        await page.getByText("Clear", { exact: true }).click();
-        if (name === "july-15") await shot("questions");
-        await page.getByText("Overcast", { exact: true }).click();
-        await page.getByText("Calm", { exact: true }).click();
-        await page.getByRole("button", { name: "Show setup" }).click();
-        await page.getByText("Run the whole spread at").waitFor();
-        await shot(`recommendation-${name}`);
-      }
-      // Conditions for a trip today, so the stations the engine read are marked.
-      await page.goto(base);
-      await page.waitForLoadState("networkidle");
+      await shot("first-visit");
       await page.getByRole("button", { name: "Get setup" }).click();
-      for (const t of ["Daytime", "Clear", "Bright", "Calm", "I know the break"]) await page.getByText(t, { exact: true }).click();
+      // Today, with the buoy's data: the questions, then the result, then the two screens behind it.
+      await page.getByText(/Today, now\./).waitFor();
+      await shot("today-questions");
+      await pick("Water clarity", "Clear");
+      await pick("Sky", "Bright");
+      await pick("What you know", "I know the break");
       await page.getByLabel("Break depth, in feet").fill("60");
-      await page.getByRole("button", { name: "Show setup" }).click();
+      await page.getByText("Run the whole spread at").waitFor();
+      await shot("today-result");
+      await page.getByRole("button", { name: "Change conditions" }).click();
+      await shot("conditions-in-use");
+      await page.getByRole("button", { name: "Done" }).click();
       await page.getByRole("button", { name: "View conditions" }).click();
       await page.getByRole("heading", { name: /Conditions at/ }).waitFor();
       await shot("conditions");
+      await page.getByRole("button", { name: "Back" }).click();
+      // A forecast day, at first light.
+      await page.getByRole("button", { name: "Sat 17" }).click();
+      await page.getByRole("group", { name: "Time on the water" }).waitFor();
+      await shot("forecast-day");
       await page.close();
     }
   }
