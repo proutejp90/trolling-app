@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, LocateFixed, Minus, Plus } from "lucide-react";
+import { ArrowLeft, ChevronRight, LocateFixed, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { EngineResult, Setup, SetupLureType, Tag } from "@recommender/engine";
 import type { Conditions } from "@/server/conditions";
@@ -9,7 +9,7 @@ import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Choice } from "@/components/ui/choice";
 import { checkDate, defaultDate, nearestFirst, nextSeasonStart, type PortOption } from "@/lib/home";
-import { FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
+import { caveatsToShow, depthSourceLine, FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
 import type { Explanation, Reason } from "@/server/agent/schema";
 
 type Step = "home" | "questions" | "result" | "conditions";
@@ -27,24 +27,41 @@ const mph = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min.toF
 const monthName = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
 const inputClass = "h-touch w-full rounded-sm border border-border bg-surface-2 px-3 text-body text-fg hover:border-border-strong";
 
-function Tags({ tags }: { tags: Tag[] }) {
+/**
+ * One reason with its evidence tags. A tag is a button: tapping it opens one
+ * fixed sentence about that kind of evidence under the reason, and tapping again closes it.
+ */
+function ReasonRow({ tags, text }: { tags: Tag[]; text: string }) {
+  const [open, setOpen] = useState<Tag | null>(null);
+  const id = useId();
   return (
-    <span className="flex shrink-0 gap-1">
-      {tags.map((t) => (
-        <span key={t} title={TAG_EXPLAINER[t]}>
-          <Badge tone={EVIDENCE_TAGS[t].tone}>{EVIDENCE_TAGS[t].label}</Badge>
+    <li>
+      <div className="flex items-start gap-3">
+        <span className="flex shrink-0 gap-1">
+          {tags.map((t) => (
+            <button
+              key={t} type="button" aria-expanded={open === t} aria-controls={id}
+              onClick={() => setOpen(open === t ? null : t)}
+              className="inline-flex h-touch items-center rounded-sm"
+            >
+              <Badge tone={EVIDENCE_TAGS[t].tone}>{EVIDENCE_TAGS[t].label}</Badge>
+            </button>
+          ))}
         </span>
-      ))}
-    </span>
+        <span className="flex min-h-touch items-center text-fg-secondary">{text}</span>
+      </div>
+      <p id={id} className="text-small text-fg-tertiary">{open ? TAG_EXPLAINER[open] : null}</p>
+    </li>
   );
 }
 
-function SetupCard({ type, setups, reasons }: { type: SetupLureType; setups: Setup[]; reasons: Reason[] }) {
+function SetupCard({ type, setups, reasons, startOpen }: { type: SetupLureType; setups: Setup[]; reasons: Reason[]; startOpen: boolean }) {
   const first = setups[0]!;
+  const [open, setOpen] = useState(startOpen);
   return (
     <section className="rounded-md border border-border-subtle bg-surface-2 p-4">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-t3">{TYPE_NAME[type]}</h3>
+        <h2 className="text-t3">{TYPE_NAME[type]}</h2>
         <span className="text-small text-fg-tertiary">{setups.length} {setups.length === 1 ? "line" : "lines"}{first.position === "deepest" ? ", deepest" : ""}</span>
       </div>
       <dl className="mt-3 flex flex-col gap-2">
@@ -73,15 +90,13 @@ function SetupCard({ type, setups, reasons }: { type: SetupLureType; setups: Set
           </li>
         ))}
       </ul>
-      <details className="mt-3">
-        <summary className="flex min-h-touch cursor-pointer items-center text-fg-secondary">Why this setup</summary>
-        <ul className="flex flex-col gap-3 pb-1">
-          {reasons.map((r) => (
-            <li key={r.text} className="flex items-start gap-3">
-              <Tags tags={r.tags} />
-              <span className="text-fg-secondary">{r.text}</span>
-            </li>
-          ))}
+      <details className="mt-3" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+        <summary className="flex min-h-touch cursor-pointer list-none items-center gap-2 rounded-sm text-fg [&::-webkit-details-marker]:hidden">
+          <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" className={`shrink-0 text-fg-tertiary transition-transform duration-150 ${open ? "rotate-90" : ""}`} />
+          Why this setup
+        </summary>
+        <ul className="flex flex-col pb-1">
+          {reasons.map((r) => <ReasonRow key={r.text} tags={r.tags} text={r.text} />)}
         </ul>
       </details>
     </section>
@@ -104,7 +119,7 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
     const opening = nextSeasonStart(date);
     return (
       <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-surface-2 p-4">
-        <h2 className="text-t3" tabIndex={-1} data-screen-heading>Out of season</h2>
+        <h1 className="text-t3" tabIndex={-1} data-screen-heading>Out of season</h1>
         <p className="text-fg-secondary">
           {monthName(date)} is outside the season. The rules cover April through October. Go back to pick a date in that range, or see the setup for opening day.
         </p>
@@ -122,7 +137,7 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h2>
+        <h1 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h1>
         <p className="mt-1 text-fg-secondary">
           {explanation.conditions_summary}
           {/* Said only when the angler chose where to fish. In other months the summary already places the fish. */}
@@ -137,7 +152,8 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
         </div>
         <ConditionsSummary c={c} />
         <p className="text-fg-secondary">
-          Depth comes from {rec.sources.depth}.
+          {/* Where depth came from is said once: here only if the confidence reason above does not name it. */}
+          {depthSourceLine(explanation.confidence_reason, rec.sources.depth)}
           {rec.sources.sky ? ` Sky comes from ${rec.sources.sky === "you" ? "your answer" : rec.sources.sky === "forecast" ? "the forecast" : "the time of day"}.` : ""}
           {result.upwelling_likely ? ` ${c.wind_station ?? "Wind history"} shows a day or more of north or east wind.` : ""}
         </p>
@@ -150,10 +166,10 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
           <p className="text-small text-fg-tertiary">at the lure, on {result.setups.length} {result.setups.length === 1 ? "line" : "lines"}</p>
         </div>
       ) : null}
-      {groups.map((g) => <SetupCard key={g.type} type={g.type} setups={g.setups} reasons={explanation.groups.find((x) => x.lure_type === g.type)?.reasons ?? []} />)}
+      {groups.map((g, i) => <SetupCard key={g.type} type={g.type} setups={g.setups} startOpen={i === 0} reasons={explanation.groups.find((x) => x.lure_type === g.type)?.reasons ?? []} />)}
       {explanation.report_notes.length ? (
         <section>
-          <h3 className="text-t3">Recent reports</h3>
+          <h2 className="text-t3">Recent reports</h2>
           <ul className="mt-2 flex flex-col gap-3">
             {explanation.report_notes.map((n) => (
               <li key={n.text} className="flex items-start gap-3">
@@ -166,13 +182,13 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
       ) : null}
       {result.setups.length === 0 ? (
         <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
-          <h3 className="text-t3">No setup fits</h3>
+          <h2 className="text-t3">No setup fits</h2>
           <p className="mt-2 text-fg-secondary">Nothing in the catalog passes the rules for these conditions.</p>
         </div>
       ) : null}
       {result.dropped_types.length || result.dropped_lures.length || result.notes.length ? (
         <section>
-          <h3 className="text-t3">Left out</h3>
+          <h2 className="text-t3">Left out</h2>
           <ul className="mt-2 flex list-disc flex-col gap-2 pl-5 text-fg-secondary">
             {result.dropped_types.map((d) => <li key={d.lure_type}>{d.reason}</li>)}
             {result.dropped_lures.map((d) => <li key={d.lure_id}>{d.name}: {d.reason}</li>)}
@@ -182,19 +198,14 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
       ) : null}
       {result.tips.length ? (
         <section>
-          <h3 className="text-t3">If nothing bites</h3>
-          <ul className="mt-2 flex flex-col gap-3">
-            {result.tips.map((tip) => (
-              <li key={tip.rule_code} className="flex items-start gap-3">
-                <Tags tags={["lore"]} />
-                <span className="text-fg-secondary">{tip.text}</span>
-              </li>
-            ))}
+          <h2 className="text-t3">If nothing bites</h2>
+          <ul className="mt-2 flex flex-col">
+            {result.tips.map((tip) => <ReasonRow key={tip.rule_code} tags={["lore"]} text={tip.text} />)}
           </ul>
         </section>
       ) : null}
       <section className="text-small text-fg-tertiary">
-        {explanation.caveats.map((c) => <p key={c} className="mb-1">{c}</p>)}
+        {caveatsToShow(explanation.caveats, rec.sources.depth).map((c) => <p key={c} className="mb-1">{c}</p>)}
         <ul className="mt-2 flex list-disc flex-col gap-1 pl-5">{KNOWN_LIMITS.map((l) => <li key={l}>{l}</li>)}</ul>
       </section>
     </div>
@@ -206,14 +217,14 @@ function ConditionsView({ c }: { c: Conditions }) {
   const north = c.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-t2" tabIndex={-1} data-screen-heading>Conditions at {c.port.name}</h2>
+      <h1 className="text-t2" tabIndex={-1} data-screen-heading>Conditions at {c.port.name}</h1>
       {c.messages.length ? (
         <ul className="flex list-disc flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3 pl-8 text-fg-secondary">
           {c.messages.map((m) => <li key={m}>{m}</li>)}
         </ul>
       ) : null}
       <section>
-        <h3 className="text-t3">Stations</h3>
+        <h2 className="text-t3">Stations</h2>
         {c.readings.length === 0 ? <p className="mt-2 text-fg-secondary">No station linked to this port has reported in the last three days.</p> : (
           <ul className="mt-2 border-t border-border-subtle">
             {c.readings.map((r) => (
@@ -250,13 +261,13 @@ function ConditionsView({ c }: { c: Conditions }) {
         )}
       </section>
       <section>
-        <h3 className="text-t3">Wind, last 48 hours</h3>
+        <h2 className="text-t3">Wind, last 48 hours</h2>
         <p className="mt-2 text-fg-secondary">
           {c.wind_history.length ? `${c.wind_station}: ${north} of ${c.wind_history.length} hours from the north or east.` : "Too little wind history to say."}
         </p>
       </section>
       <section>
-        <h3 className="text-t3">Forecast for the trip</h3>
+        <h2 className="text-t3">Forecast for the trip</h2>
         <p className="mt-2 text-fg-secondary tabular-nums">
           {c.forecast
             ? [c.forecast.sky_cover_pct !== null ? `Sky cover ${c.forecast.sky_cover_pct}%` : null, c.forecast.wind_speed_mph !== null ? `Wind ${c.forecast.wind_speed_mph} mph${c.forecast.wind_dir_deg !== null ? ` from the ${compass(c.forecast.wind_dir_deg)}` : ""}` : null, c.forecast.hazards.length ? `Marine hazard in effect: ${c.forecast.hazards.map((h) => `${h.phenomenon}.${h.significance}`).join(", ")}` : null].filter(Boolean).join(". ")
@@ -468,7 +479,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
             {dateError ? <p role="alert" className="text-danger">{dateError}</p> : openingDay && date === openingDay ? <p className="text-fg-tertiary">Out of season now. Showing opening day.</p> : null}
           </div>
         </div>
-        <div className="mt-auto flex flex-col gap-2">
+        <div className="mt-auto flex flex-col gap-2 md:mt-0">
           {errorLine}
           <Button type="submit" variant="primary" size="touch" disabled={!date || busy}>Get setup</Button>
           <p className="text-small text-fg-tertiary">The season runs April through October.</p>
@@ -516,7 +527,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
             <Button size="touch" aria-label="More lines" disabled={lines >= 12} onClick={() => setLines((n) => Math.min(12, n + 1))}><Plus size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
           </div>
         </div>
-        <div className="mt-auto flex flex-col gap-2">
+        <div className="mt-auto flex flex-col gap-2 md:mt-0">
           {errorLine}
           <Button type="submit" variant="primary" size="touch" disabled={!ready}>Show setup</Button>
           {!ready && !error ? <p className="text-small text-fg-tertiary">Answer each question to see the setup.</p> : null}

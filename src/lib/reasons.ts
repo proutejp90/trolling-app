@@ -48,11 +48,12 @@ export const TYPE_SPEED_REASON: Record<Exclude<SetupLureType, "plug">, { text: s
   meat_rig: { text: "Meat rig speed is an estimate: sources say only that meat runs slower than spoons.", tags: ["lore"] },
 };
 
+/** One sentence per evidence tag, shown when the tag is tapped. Fixed here so the agent never writes them. */
 export const TAG_EXPLAINER: Record<Tag | "your_log", string> = {
-  science: "Science: published research on fish behavior and how light carries in water.",
-  reports: "Reports: Michigan DNR weekly fishing reports.",
-  lore: "Lore: captain and angler experience. No research supports it.",
-  your_log: "Your log: results from your own logged trips.",
+  science: "Based on fisheries research.",
+  reports: "Based on recent Michigan DNR fishing reports.",
+  lore: "Captain and angler experience. No research backs it.",
+  your_log: "Based on your own logged trips.",
 };
 
 /** Shown with every result. */
@@ -63,3 +64,18 @@ export const KNOWN_LIMITS = [
   "Color depth bands come from angling literature and have not been measured for this lake.",
   "Speed and lure type guidance is captain and angler experience. No research supports it.",
 ];
+
+/**
+ * Where depth came from is said once, in the confidence box. This line is added
+ * there only when the confidence reason does not already name the source.
+ */
+export function depthSourceLine(confidenceReason: string, depthSource: string): string | null {
+  return confidenceReason.toLowerCase().includes(depthSource.toLowerCase()) ? null : `Depth comes from ${depthSource}.`;
+}
+
+const RESTATES_DEPTH_SOURCE = /\bmonth(ly)? defaults?\b|\bdepth (comes|is|are)\b[^.;]*\b(from|estimate|starting)\b|\bno (live |recent )?(water|buoy) (data|reading)/i;
+
+/** The caveats to show: any that restate where depth came from are dropped, since the confidence box covers it. */
+export function caveatsToShow(caveats: string[], depthSource: string): string[] {
+  return caveats.filter((c) => !c.toLowerCase().includes(depthSource.toLowerCase()) && !RESTATES_DEPTH_SOURCE.test(c));
+}

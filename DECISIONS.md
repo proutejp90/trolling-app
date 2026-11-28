@@ -200,6 +200,16 @@ Source: `docs/UI-REVIEW-FIXES.md`.
 - **Location messages.** A refusal, or a browser with no location support, says "Location is off. Pick a port from the list." A timeout or other failure says "Couldn't get your location. Pick a port from the list." Success says "Nearest port: [name]."
 - **Browser tests pin the device clock** to the fixture time, so the date-range check does not start failing them in a later year.
 
+## UI review fixes, Part C
+
+- **Saying the depth source once.** The confidence reason is the one place. The "Depth comes from ..." line is added under it only when the confidence reason does not already contain the source's words (for example "month defaults"), so the fact shows once whether the agent or the template wrote the reason. The check is done on screen, so explanations cached before this change are covered too.
+- **Which caveats count as restating it.** A caveat is dropped when it contains the depth source's words, or says "month defaults", "depth comes from / is ...", or "no water data / no buoy reading". The speed-at-the-lure caveat and caveats about other things stay. The rule is `caveatsToShow` in `src/lib/reasons.ts`, with tests.
+- **The summary line** now says only where the fish are this time of year, from the agent and from the template. The buoy reading that used to follow it in the template still shows in the confidence box.
+- **Prompt version `2026-11-28.2`.** The agent is told to keep data sources out of the summary and caveats and to name the depth source in the confidence reason. This is an instruction, not a server check: an agent answer that ignores it still passes, and the screen rules above keep the depth source to one mention in the box and caveats but not in the summary line.
+- **Section headings** under each screen's `h1` moved from `h3` to `h2` so the levels do not skip. Their styles are unchanged. "Out of season" is that screen's `h1`.
+- **Tag chips are an on-water departure from Meridian.** Meridian says badges are not buttons. A tag chip is a button that draws a badge inside it, so the badge itself stays a badge. Tag buttons are 44px tall with the badge centered inside, and the reason text is centered against them. The sentence opens under the reason; one tag's sentence shows at a time per reason. "If nothing bites" tips use the same tappable tags.
+- **Wide screens** means Tailwind's `md` breakpoint, 768px.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).
