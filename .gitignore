@@ -10,3 +10,7 @@ test-results
 playwright-report
 fixtures/live
 .netlify
+
+# Python
+__pycache__/
+.pytest_cache/

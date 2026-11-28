@@ -29,6 +29,7 @@ Mobile web app that gives a Lake Michigan salmon troller a starting spread: whic
 - `packages/engine`: the rules engine, `evaluate(context, rules, thresholds, catalog)`. Golden scenarios live in `packages/engine/test`
 - `src/server`: `fetcher.ts` is the only module that fetches; `sources/` parse NDBC, Seagull and NWS; `jobs/refresh.ts` fills the cache; `conditions.ts` reads it
 - `src/server/agent`: the explaining agent. `schema.ts` (words only), `checks.ts` (server-side checks), `template.ts` (fallback), `prompt.ts` (versioned), `explain.ts` (retry and fallback). Bump `PROMPT_VERSION` on any prompt change and rerun `npm run evals`
+- `jobs/lake_model`: the one Python program. It reads NOAA's lake model on GitHub Actions and posts profiles to `/api/jobs/model`. Tests: `python -m pytest` in that folder
 - `fixtures/`: recorded responses. `FIXTURES=replay:<set>` replays them; see `fixtures/README.md`
 - `seed/`: starter rules, thresholds, ports, stations, placeholder lures
 - `supabase/migrations`: schema. `supabase/local-shim.sql` is for plain Postgres only

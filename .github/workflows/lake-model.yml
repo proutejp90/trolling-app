@@ -1,0 +1,35 @@
+name: Lake model
+
+# Reads NOAA's lake model for the sample points off each port and posts the profiles to the app.
+# NOAA runs the model at 00, 06, 12 and 18 UTC; a run is on AWS about 3 h 15 min later.
+on:
+  schedule:
+    - cron: "35 3,9,15,21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: lake-model
+  cancel-in-progress: false
+
+# The job proves who it is with a token GitHub signs for this workflow, so no secret is stored here.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The live site. Set a repository variable named SITE_URL to point somewhere else.
+      SITE_URL: ${{ vars.SITE_URL || 'https://evanstism.netlify.app' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: jobs/lake_model/requirements.txt
+      - run: pip install -r jobs/lake_model/requirements.txt
+      - name: Read the model and post it
+        run: python jobs/lake_model/lake_model.py

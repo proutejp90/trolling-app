@@ -297,6 +297,32 @@ These wait for the day-selection and prefilled-conditions work: the time windows
 - Turbidity from a buoy: no seeded station reports it.
 - "Plan card above the fold" is no longer checked by a browser test: with questions on screen the plan card sits below them. With nothing to ask it starts about 330px down at 390px wide.
 
+## Phase 2b, part one: the lake model job
+
+### What the spec asked to be confirmed (checked 2026-11-28)
+
+- **Where the files are.** NOAA's THREDDS server and tidesandcurrents.noaa.gov are not reachable from this build session. The model's public archive on AWS is, and it is the documented alternative: `https://noaa-nos-ofs-pds.s3.amazonaws.com/lmhofs/netcdf/YYYY/MM/DD/`. The job reads from there.
+- **File naming.** `lmhofs.tCCz.YYYYMMDD.fields.nHHH.nc` for the nowcast (n000 to n006, the six hours up to the run) and `...fields.fHHH.nc` for the forecast (f000 to f120, hourly). There are also `regulargrid` files and small `stations` files.
+- **Run times.** Four runs a day, at 00, 06, 12 and 18 UTC. On 2026-11-27 each run's last file reached AWS 3 h 15 to 3 h 17 min after the run time. The job runs at 03:35, 09:35, 15:35 and 21:35 UTC and waits for 3 h 20 min.
+- **Grid.** 90,806 nodes and **20** vertical layers (21 levels, which is where the spec's "21 layers" comes from). Each file is about 188 MB and holds one hour.
+- **Subsetting.** The server has no subsetting service, but `temp` is stored uncompressed, so the netCDF library reads just our nodes over HTTP byte ranges (`#mode=bytes`). No file is downloaded. Reading 12 files took 57 seconds from this session through its proxy.
+- **The stations files** hold modeled profiles at 48 fixed points (the buoy positions, such as 45161 off Muskegon in 70 ft). They are small, but they are not over 60, 120 and 200 ft off each port, so the job uses the gridded files as the spec says.
+
+### Choices
+
+- **Sample points** are found on a line due west of an east-shore port (due east from the west shore), stepping a tenth of a mile. For each target depth the first node at least that deep is taken, or the node before it when that one is closer in depth. Real results on 2026-11-28: all ten ports have three points; most are within a few feet of the target (Muskegon 62, 116 and 200 ft); steep shores are further off (Manistee's nearest usable node for 60 ft is over 92 ft). The actual bottom depth is stored and should be shown, not the target. **Open question for the owner**, as in the spec: are these the right contours?
+- **The points are recomputed on every run** from the grid, so a grid change at NOAA cannot leave a stale node index behind.
+- **Break depth** is the midpoint between the two layers with the steepest cooling per metre. It is null when the water does not cool with depth anywhere.
+- **Band depth** is where the profile first cools to the top of `temp_band_f`, interpolated. It is 0 when the surface is already that cold, and null when the water never gets that cold.
+- **The job posts to the app; the app writes to the database.** `GET /api/jobs/model` gives the job the ports and the band; `POST` stores points and profiles. GitHub holds no database password.
+- **The job proves who it is with a token GitHub signs, not a stored secret.** GitHub Actions gives the workflow a short-lived token naming the repository, branch and workflow file. The app checks the signature against GitHub's published keys and accepts it only from `proutejp90/trolling-app`, on `main`, from `lake-model.yml`, addressed to this site (`src/server/github-oidc.ts`). So nothing has to be entered in GitHub's settings. `CRON_SECRET` is still accepted, for a run from anywhere else. The site address defaults to the live site in the workflow; a repository variable `SITE_URL` overrides it. If the repository is renamed or moved, set `LAKE_MODEL_REPOSITORY` in Netlify.
+- **A newer run replaces an older run's value for the same hour, never the reverse.** Profiles more than 48 hours past are deleted; yesterday's is kept so an upwelling can be seen arriving.
+- **The netCDF library is not thread-safe**, so each file is read in its own process (six at a time). Threads crash it.
+- **Each file's surface height (`zeta`) is added to the bottom depth** when layers are turned into depths.
+
+### Not built in this part
+Using the profiles: level 1m in the fallback ladder, forecast profiles for future days, the modeled label, the depth chart and sample-point tabs, model checks against buoys, and forecast waves. The tables for all of them exist.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).

@@ -1,0 +1,305 @@
+{
+ "note": "Real output of jobs/lake_model/lake_model.py --dry-run for Muskegon, NOAA LMHOFS run 2026-11-28 12Z, first hour read (06:00Z nowcast). port_id holds the port's name; the test swaps in its id.",
+ "run_at": "2026-11-28T12:00:00Z",
+ "points": [
+  {
+   "port_id": "Muskegon",
+   "label": "near",
+   "node_index": 16216,
+   "lat": 43.2291,
+   "lon": -86.37961,
+   "bottom_depth_m": 18.77
+  },
+  {
+   "port_id": "Muskegon",
+   "label": "mid",
+   "node_index": 17438,
+   "lat": 43.2254,
+   "lon": -86.4328,
+   "bottom_depth_m": 35.28
+  },
+  {
+   "port_id": "Muskegon",
+   "label": "off",
+   "node_index": 18298,
+   "lat": 43.2228,
+   "lon": -86.48999,
+   "bottom_depth_m": 61.08
+  }
+ ],
+ "profiles": [
+  {
+   "port_id": "Muskegon",
+   "label": "near",
+   "valid_at": "2026-11-28T06:00:00Z",
+   "is_forecast": false,
+   "profile": [
+    {
+     "depth_m": 0.48,
+     "temp_c": 8.59
+    },
+    {
+     "depth_m": 1.43,
+     "temp_c": 8.59
+    },
+    {
+     "depth_m": 2.38,
+     "temp_c": 8.6
+    },
+    {
+     "depth_m": 3.34,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 4.29,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 5.24,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 6.2,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 7.15,
+     "temp_c": 8.62
+    },
+    {
+     "depth_m": 8.11,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 9.06,
+     "temp_c": 8.61
+    },
+    {
+     "depth_m": 10.01,
+     "temp_c": 8.6
+    },
+    {
+     "depth_m": 10.97,
+     "temp_c": 8.59
+    },
+    {
+     "depth_m": 11.92,
+     "temp_c": 8.49
+    },
+    {
+     "depth_m": 12.87,
+     "temp_c": 8.18
+    },
+    {
+     "depth_m": 13.83,
+     "temp_c": 7.66
+    },
+    {
+     "depth_m": 14.78,
+     "temp_c": 7.66
+    },
+    {
+     "depth_m": 15.73,
+     "temp_c": 7.66
+    },
+    {
+     "depth_m": 16.69,
+     "temp_c": 7.66
+    },
+    {
+     "depth_m": 17.64,
+     "temp_c": 7.66
+    },
+    {
+     "depth_m": 18.59,
+     "temp_c": 7.66
+    }
+   ],
+   "surface_temp_c": 8.59,
+   "break_depth_m": 13.35,
+   "band_depth_m": 0.0
+  },
+  {
+   "port_id": "Muskegon",
+   "label": "mid",
+   "valid_at": "2026-11-28T06:00:00Z",
+   "is_forecast": false,
+   "profile": [
+    {
+     "depth_m": 0.89,
+     "temp_c": 8.69
+    },
+    {
+     "depth_m": 2.67,
+     "temp_c": 8.7
+    },
+    {
+     "depth_m": 4.45,
+     "temp_c": 8.72
+    },
+    {
+     "depth_m": 6.23,
+     "temp_c": 8.72
+    },
+    {
+     "depth_m": 8.01,
+     "temp_c": 8.73
+    },
+    {
+     "depth_m": 9.79,
+     "temp_c": 8.73
+    },
+    {
+     "depth_m": 11.57,
+     "temp_c": 8.73
+    },
+    {
+     "depth_m": 13.34,
+     "temp_c": 8.73
+    },
+    {
+     "depth_m": 15.12,
+     "temp_c": 8.73
+    },
+    {
+     "depth_m": 16.9,
+     "temp_c": 8.74
+    },
+    {
+     "depth_m": 18.68,
+     "temp_c": 8.74
+    },
+    {
+     "depth_m": 20.46,
+     "temp_c": 8.72
+    },
+    {
+     "depth_m": 22.24,
+     "temp_c": 8.59
+    },
+    {
+     "depth_m": 24.02,
+     "temp_c": 8.17
+    },
+    {
+     "depth_m": 25.8,
+     "temp_c": 7.54
+    },
+    {
+     "depth_m": 27.58,
+     "temp_c": 7.12
+    },
+    {
+     "depth_m": 29.36,
+     "temp_c": 7.12
+    },
+    {
+     "depth_m": 31.14,
+     "temp_c": 7.12
+    },
+    {
+     "depth_m": 32.92,
+     "temp_c": 7.12
+    },
+    {
+     "depth_m": 34.7,
+     "temp_c": 7.12
+    }
+   ],
+   "surface_temp_c": 8.69,
+   "break_depth_m": 24.91,
+   "band_depth_m": 0.0
+  },
+  {
+   "port_id": "Muskegon",
+   "label": "off",
+   "valid_at": "2026-11-28T06:00:00Z",
+   "is_forecast": false,
+   "profile": [
+    {
+     "depth_m": 1.53,
+     "temp_c": 9.47
+    },
+    {
+     "depth_m": 4.6,
+     "temp_c": 9.48
+    },
+    {
+     "depth_m": 7.67,
+     "temp_c": 9.48
+    },
+    {
+     "depth_m": 10.74,
+     "temp_c": 9.47
+    },
+    {
+     "depth_m": 13.81,
+     "temp_c": 9.47
+    },
+    {
+     "depth_m": 16.88,
+     "temp_c": 9.47
+    },
+    {
+     "depth_m": 19.95,
+     "temp_c": 9.44
+    },
+    {
+     "depth_m": 23.02,
+     "temp_c": 9.17
+    },
+    {
+     "depth_m": 26.09,
+     "temp_c": 8.69
+    },
+    {
+     "depth_m": 29.16,
+     "temp_c": 8.18
+    },
+    {
+     "depth_m": 32.23,
+     "temp_c": 7.53
+    },
+    {
+     "depth_m": 35.3,
+     "temp_c": 6.84
+    },
+    {
+     "depth_m": 38.37,
+     "temp_c": 6.72
+    },
+    {
+     "depth_m": 41.44,
+     "temp_c": 6.46
+    },
+    {
+     "depth_m": 44.51,
+     "temp_c": 6.31
+    },
+    {
+     "depth_m": 47.58,
+     "temp_c": 6.17
+    },
+    {
+     "depth_m": 50.65,
+     "temp_c": 6.06
+    },
+    {
+     "depth_m": 53.72,
+     "temp_c": 5.99
+    },
+    {
+     "depth_m": 56.79,
+     "temp_c": 5.5
+    },
+    {
+     "depth_m": 59.86,
+     "temp_c": 5.34
+    }
+   ],
+   "surface_temp_c": 9.47,
+   "break_depth_m": 33.77,
+   "band_depth_m": 0.0
+  }
+ ]
+}
