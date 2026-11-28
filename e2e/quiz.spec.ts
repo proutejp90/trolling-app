@@ -6,6 +6,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function start(page: Page, date: string, port = "Muskegon") {
+  await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z")); // the device clock matches the server's
   await page.goto("/");
   await page.getByLabel("Port").selectOption(port);
   await page.getByLabel("Date").fill(date);
@@ -159,5 +160,87 @@ test.describe("recommendation flow", () => {
     await answer(page, { where: "Near the river mouth" });
     await page.getByRole("button", { name: "Show setup" }).click();
     await expect(page.getByText("This setup is for staging fish.")).toBeVisible();
+  });
+});
+
+test.describe("home", () => {
+  const dateField = (page: Page) => page.getByLabel("Date");
+  const portOrder = (page: Page) => page.getByLabel("Port").locator("option").allTextContents();
+
+  test("out of season, the date defaults to opening day and says so", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-11-28T15:00:00"));
+    await page.goto("/");
+    await expect(dateField(page)).toHaveValue("2027-04-01");
+    await expect(page.getByText("Out of season now. Showing opening day.")).toBeVisible();
+    // A date typed by hand still gets the out-of-season screen.
+    await dateField(page).fill("2026-12-05");
+    await expect(page.getByText("Out of season now. Showing opening day.")).toHaveCount(0);
+    await page.getByRole("button", { name: "Get setup" }).click();
+    await expect(page.getByRole("heading", { name: "Out of season" })).toBeVisible();
+  });
+
+  test("in season, the date defaults to today with no note", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-07-10T15:00:00"));
+    await page.goto("/");
+    await expect(dateField(page)).toHaveValue("2026-07-10");
+    await expect(page.getByText("Out of season now. Showing opening day.")).toHaveCount(0);
+  });
+
+  test("a six-digit year shows the error at the Date field and sends nothing", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
+    await page.goto("/");
+    let requests = 0;
+    page.on("request", (r) => { if (r.url().includes("/api/recommend")) requests++; });
+    await dateField(page).focus();
+    await page.keyboard.type("0715152027"); // month, day, then the six-digit year from the review
+    await expect(dateField(page)).toHaveValue("152027-07-15");
+    await page.getByRole("button", { name: "Get setup" }).click();
+    const message = page.getByText("Enter a date like 07/15/2027.");
+    await expect(message).toBeVisible();
+    await expect(dateField(page)).toHaveAttribute("aria-invalid", "true");
+    expect(await dateField(page).getAttribute("aria-describedby")).toBe(await message.locator("xpath=..").getAttribute("id"));
+    expect(requests).toBe(0);
+    await dateField(page).fill("2031-07-15");
+    await page.getByRole("button", { name: "Get setup" }).click();
+    await expect(page.getByText("Pick a date between 2025 and 2028.")).toBeVisible();
+    expect(requests).toBe(0);
+  });
+
+  test("a network failure still shows the general error box", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
+    await page.goto("/");
+    await page.route("**/api/recommend", (route) => route.abort());
+    await dateField(page).fill("2026-07-15");
+    await page.getByRole("button", { name: "Get setup" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Couldn't build a setup. Check your connection and try again." })).toBeVisible();
+  });
+
+  test("the server names the date field when the date is bad", async ({ request }) => {
+    const res = await request.post("/api/recommend", { data: { port: "Muskegon", date: "152027-07-15" } });
+    expect(res.status()).toBe(400);
+    expect(await res.json()).toEqual({ error: "Enter a date like 07/15/2027.", field: "date" });
+  });
+
+  test("Use my location lists the nearest port first and selects it", async ({ page, context }) => {
+    await context.grantPermissions(["geolocation"]);
+    await context.setGeolocation({ latitude: 43.063, longitude: -86.228 }); // Grand Haven
+    await page.goto("/");
+    await expect(page.getByLabel("Port")).toHaveValue("Muskegon"); // nothing is asked on load
+    await page.getByRole("button", { name: "Use my location" }).click();
+    await expect(page.getByLabel("Port")).toHaveValue("Grand Haven");
+    expect((await portOrder(page))[0]).toBe("Grand Haven, MI");
+    // Kept for the session: the order survives a reload.
+    await page.reload();
+    await expect(page.getByLabel("Port")).toHaveValue("Grand Haven");
+  });
+
+  test("with location refused the list is unchanged and the app says so", async ({ page, context }) => {
+    await context.clearPermissions();
+    await page.goto("/");
+    const before = await portOrder(page);
+    await page.getByRole("button", { name: "Use my location" }).click();
+    await expect(page.getByText("Location is off. Pick a port from the list.")).toBeVisible();
+    expect(await portOrder(page)).toEqual(before);
+    await expect(page.getByLabel("Port")).toHaveValue("Muskegon");
   });
 });

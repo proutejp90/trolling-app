@@ -1,19 +1,21 @@
 import { Quiz } from "@/components/quiz/quiz";
 import { ThemeToggle } from "@/components/theme-toggle";
+import type { PortOption } from "@/lib/home";
 import * as bundled from "@/lib/ruleset";
 import { db, hasDb } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
-async function portList(): Promise<{ name: string; state: string }[]> {
+async function portList(): Promise<PortOption[]> {
   if (hasDb()) {
     try {
-      return (await db().query("select name, state from public.ports where active order by lat")).rows;
+      const { rows } = await db().query("select name, state, lat, lon from public.ports where active order by lat");
+      return rows.map((r) => ({ name: r.name, state: r.state, lat: Number(r.lat), lon: Number(r.lon) }));
     } catch (err) {
       console.error("ports query failed; using the bundled list", err);
     }
   }
-  return bundled.ports.map((p) => ({ name: p.name, state: p.state }));
+  return bundled.ports.map((p) => ({ name: p.name, state: p.state, lat: p.lat, lon: p.lon }));
 }
 
 // Home, Quick questions, Recommendation and Conditions. The questions shown are

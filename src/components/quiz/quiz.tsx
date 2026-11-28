@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowLeft, Minus, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, LocateFixed, Minus, Plus } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { EngineResult, Setup, SetupLureType, Tag } from "@recommender/engine";
 import type { Conditions } from "@/server/conditions";
 import type { QuestionField, Recommendation } from "@/server/recommend";
 import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Choice } from "@/components/ui/choice";
+import { checkDate, defaultDate, nearestFirst, nextSeasonStart, type PortOption } from "@/lib/home";
 import { FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
 import type { Explanation, Reason } from "@/server/agent/schema";
 
@@ -95,12 +96,6 @@ function ConditionsSummary({ c }: { c: Conditions }) {
       {c.temp_profile ? ", with temperature at depth" : ""}.
     </p>
   );
-}
-
-/** The next date the rules cover: April 1 of this year before the season, of next year after it. */
-function nextSeasonStart(date: string): string {
-  const year = Number(date.slice(0, 4));
-  return `${Number(date.slice(5, 7)) > 10 ? year + 1 : year}-04-01`;
 }
 
 function Result({ rec, explanation, portName, date, modeAnswered, onConditions, onTryDate }: { rec: Recommendation; explanation: Explanation; portName: string; date: string; modeAnswered: boolean; onConditions: () => void; onTryDate: (date: string) => void }) {
@@ -273,10 +268,21 @@ function ConditionsView({ c }: { c: Conditions }) {
   );
 }
 
-export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
+const today = () => new Date().toLocaleDateString("en-CA");
+/** The port order after "Use my location", kept for this browser session. It holds port names, never coordinates. */
+const PORT_ORDER_KEY = "port-order";
+
+export function Quiz({ ports: listed }: { ports: PortOption[] }) {
   const [step, setStep] = useState<Step>("home");
-  const [portName, setPortName] = useState(ports.find((p) => p.name === "Muskegon")?.name ?? ports[0]!.name);
+  const [ports, setPorts] = useState(listed);
+  const [portName, setPortName] = useState(listed.find((p) => p.name === "Muskegon")?.name ?? listed[0]!.name);
   const [date, setDate] = useState("");
+  const [openingDay, setOpeningDay] = useState<string | null>(null);
+  const [dateError, setDateError] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locationNote, setLocationNote] = useState<string | null>(null);
+  const dateInput = useRef<HTMLInputElement>(null);
+  const dateHelp = useId();
   const [time, setTime] = useState<TimeOfDay | null>(null);
   const [clarity, setClarity] = useState<Clarity | null>(null);
   const [sky, setSky] = useState<Sky | null>(null);
@@ -304,8 +310,36 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
     document.querySelector<HTMLElement>("[data-screen-heading]")?.focus({ preventScroll: true });
   }, [step]);
 
-  // Today's date is set on the device so the page carries no stale date.
-  useEffect(() => { setDate((d) => d || new Date().toLocaleDateString("en-CA")); }, []);
+  // The date is set on the device so the page carries no stale date. Out of season it is opening day.
+  useEffect(() => {
+    const start = defaultDate(today());
+    setDate((d) => d || start.date);
+    if (start.openingDay) setOpeningDay(start.date);
+    try {
+      const order: unknown = JSON.parse(sessionStorage.getItem(PORT_ORDER_KEY) ?? "null");
+      if (Array.isArray(order) && order.length) {
+        const sorted = order.map((name) => listed.find((p) => p.name === name)).filter((p): p is PortOption => Boolean(p));
+        if (sorted.length === listed.length) { setPorts(sorted); setPortName(sorted[0]!.name); }
+      }
+    } catch { /* no session storage: the list keeps its order */ }
+  }, [listed]);
+
+  // Asked for only on a tap. The position is used once to sort the list and is not kept.
+  const useMyLocation = () => {
+    const off = () => { setLocating(false); setLocationNote("Location is off. Pick a port from the list."); };
+    if (!navigator.geolocation) return off();
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const sorted = nearestFirst(listed, { lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setPorts(sorted); setPortName(sorted[0]!.name); setLocating(false);
+        setLocationNote(`Nearest port: ${sorted[0]!.name}.`);
+        try { sessionStorage.setItem(PORT_ORDER_KEY, JSON.stringify(sorted.map((p) => p.name))); } catch { /* not kept */ }
+      },
+      (err) => (err.code === err.PERMISSION_DENIED ? off() : (setLocating(false), setLocationNote("Couldn't get your location. Pick a port from the list."))),
+      { timeout: 10_000, maximumAge: 600_000 },
+    );
+  };
 
   const depthNumber = Number(depthValue);
   const depthGiven = depthKind !== "none" && depthValue !== "" && depthNumber >= 0 && depthNumber <= 400;
@@ -327,7 +361,11 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
       });
       const body = await res.json();
       if (id !== latest.current) return null;
-      if (!res.ok) { setError(body.error ?? "Couldn't build a setup. Check your connection and try again."); return null; }
+      if (!res.ok) {
+        if (body.field === "date") { setDateError(body.error); setError(null); }
+        else setError(body.error ?? "Couldn't build a setup. Check your connection and try again.");
+        return null;
+      }
       setError(null);
       setRec(body as Recommendation);
       // A question stays on screen once asked, so answering it does not make it vanish.
@@ -392,6 +430,9 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
         className="flex flex-1 flex-col gap-4"
         onSubmit={async (e) => {
           e.preventDefault();
+          const problem = checkDate(date, today());
+          setDateError(problem);
+          if (problem) { dateInput.current?.focus(); return; }
           resetAsked();
           const first = await ask();
           if (first) setStep(first.status === "out_of_season" ? "result" : "questions");
@@ -407,10 +448,26 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
             {ports.map((p) => <option key={p.name} value={p.name}>{p.name}, {p.state}</option>)}
           </select>
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-t3">Date</span>
-          <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} className={inputClass} />
-        </label>
+        <div className="-mt-2 flex flex-col gap-1">
+          <Button variant="ghost" size="touch" className="-ml-3 self-start px-3" disabled={locating} onClick={useMyLocation}>
+            <LocateFixed size={16} strokeWidth={1.5} aria-hidden="true" /> Use my location
+          </Button>
+          <p role="status" className="text-small text-fg-tertiary">{locationNote}</p>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1">
+            <span className="text-t3">Date</span>
+            <input
+              ref={dateInput} type="date" value={date} aria-invalid={dateError ? true : undefined} aria-describedby={dateHelp}
+              onChange={(e) => { setDate(e.target.value); setDateError(null); }}
+              onBlur={() => { if (date) setDateError(checkDate(date, today())); }}
+              className={`${inputClass} ${dateError ? "border-danger" : ""}`}
+            />
+          </label>
+          <div id={dateHelp} className="text-small">
+            {dateError ? <p role="alert" className="text-danger">{dateError}</p> : openingDay && date === openingDay ? <p className="text-fg-tertiary">Out of season now. Showing opening day.</p> : null}
+          </div>
+        </div>
         <div className="mt-auto flex flex-col gap-2">
           {errorLine}
           <Button type="submit" variant="primary" size="touch" disabled={!date || busy}>Get setup</Button>
