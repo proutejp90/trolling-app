@@ -268,6 +268,35 @@ The spec in `docs/BUILD-SPEC.md` replaces the one this build started from. It ad
 
 These wait for the day-selection and prefilled-conditions work: the time windows (now, first light, morning, midday, evening), the calm limit in knots, the 30% bright cutoff, the five-day forecast horizon, the today-first Home screen, and the confidence rule that lets a fresh buoy profile alone reach High. The owner's earlier rule decisions (R20, chartreuse in R11, `upwelling_shift_ft` of 15) stay in force; the new spec's text does not include them.
 
+## Build spec, second version: day selection and prefilled conditions
+
+### Where this replaces earlier work
+- **Home** no longer has a date field and a Get setup step. It opens on today's recommendation for the last port used. Get setup shows only on a first visit, when no port is known.
+- **The questions screen** is gone as a step. What no source can supply is asked in one card on Home, above the result. The spec's Quick questions screen is "Conditions in use", reached from "Change conditions" on the plan card.
+- **UI review B1** (default to opening day out of season) gives way to the spec's "opens on today". Out of season, Home shows the out-of-season card at once, with one tap to opening day, so the angler still does not have to press anything to find out.
+- **UI review Part A's rule that the dark beats a sky answer** is reversed. The spec says an angler's change always wins and is marked as theirs.
+- **Buoy readings apply to today only**, as the spec's day table says. Before, they were used up to two days ahead (`trip_max_days_ahead`, now retired). Until the lake model is built, tomorrow through five days ahead falls back to month defaults for water, with the weather forecast for that day.
+
+### Choices the spec left open
+- **Time windows.** First light is 30 minutes before sunrise; morning is 2 hours after sunrise; midday is halfway between sunrise and sunset; evening is 30 minutes before sunset. "Now" is the current time and only applies today. The first quiz's four windows are still accepted by the API, so stored requests and the engine tests keep working.
+- **Low light** is the dark, plus `low_light_minutes` (45) either side of sunrise and sunset. So first light and evening are low light whatever the cloud cover.
+- **Cloud cover between 30% and 70%** counts as bright. The spec gives 30% as the top of bright and 70% as the bottom of overcast and says nothing of the gap; the engine has only bright, overcast and low light. No `sky_bright_max_cover_pct` threshold was added, since nothing would read it. **Open question for the owner.**
+- **Calm** is 5 knots (`wind_calm_max_kt`), replacing 6 mph. Today it is read from the nearest in-range station on the water with a reading under `obs_fresh_hours` old; airports do not count. Otherwise, and on other days, it comes from the forecast.
+- **Source labels.** Low light worked out from the sun's position with no forecast behind it is labeled Default, since nothing measured it. With a forecast for the hour it is labeled Forecast, as scenario G46 expects.
+- **"Today" is today at the port.** The day strip, the trip date and the alerts all use the port's time zone.
+- **Past dates** get month defaults, low confidence and a "Past date" label. The stored snapshot beside a logged trip (G40) needs the trolling log and is not built.
+- **Remembered answers** (clarity per port, line count) live in the browser's local storage, since there is no sign-in yet. Clarity is offered again only within `clarity_answer_max_age_days` (3); the server checks the age.
+- **Overrides** are stored in `recommendations.context.overrides`, each with the value it replaced and that value's source. No new table.
+- **Refresh.** Today's result refreshes every five minutes, when the angler returns to the app, and from a Refresh button. A pull-to-refresh gesture is not built: browsers already use that gesture to reload the page.
+- **The calendar field** takes a typed date once typing stops for a moment or the field is left. Typing a date passes through other valid dates on the way.
+- **Confidence** follows the spec's list in `src/server/confidence.ts`. A fresh buoy profile now reaches High on its own. Nothing raises or lowers a step for reports or the log yet, since neither exists.
+- **The agent's explanation** is requested after a short pause on a result, so moving along the day strip does not ask for one per day.
+
+### Not built here
+- Water depth fished (near, mid, offshore sample points), the lake model's forecast profile and forecast waves: Phase 2b.
+- Turbidity from a buoy: no seeded station reports it.
+- "Plan card above the fold" is no longer checked by a browser test: with questions on screen the plan card sits below them. With nothing to ask it starts about 330px down at 390px wide.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).

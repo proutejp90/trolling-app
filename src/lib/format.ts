@@ -16,7 +16,8 @@ export interface Wind48h { station: string | null; hours: number; north_east_hou
 export function windHistoryLine(w: Wind48h, daysToTrip: number): string {
   if (!w.enough) return `Wind history needs a day of readings. ${w.hours ? `${count(w.hours, "hour")} so far` : "None so far"}.`;
   const line = `${w.station}: ${w.north_east_hours} of ${w.hours} hours from the north or east.`;
-  return w.used ? line : `${line} Not used for this trip: it is ${count(daysToTrip, "day")} away.`;
+  if (w.used) return line;
+  return daysToTrip < 0 ? `${line} Not used: this date has passed.` : `${line} Not used for this trip: it is ${count(daysToTrip, "day")} away.`;
 }
 
 const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];

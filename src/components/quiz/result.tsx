@@ -124,9 +124,9 @@ function SetupCard({ type, setups, reasons, traits, startOpen }: { type: SetupLu
   );
 }
 
-export function Result({ rec, explanation, writing, portName, date, modeAnswered, onConditions, onTryDate }: {
+export function Result({ rec, explanation, writing, portName, date, modeAnswered, onConditions, onEdit, onTryDate }: {
   rec: Recommendation; explanation: Explanation; writing: boolean; portName: string; date: string; modeAnswered: boolean;
-  onConditions: () => void; onTryDate: (date: string) => void;
+  onConditions: () => void; onEdit: () => void; onTryDate: (date: string) => void;
 }) {
   const result: EngineResult = rec.engine;
   if (rec.status === "out_of_season") {
@@ -135,7 +135,7 @@ export function Result({ rec, explanation, writing, portName, date, modeAnswered
       <Card className="flex flex-col gap-3 p-4">
         <h1 className="text-t3" tabIndex={-1} data-screen-heading>Out of season</h1>
         <p className="text-fg-secondary">
-          {monthName(date)} is outside the season. The rules cover April through October. Go back to pick a date in that range, or see the setup for opening day.
+          {monthName(date)} is outside the season. The rules cover April through October. Pick a date in that range, or see the setup for opening day.
         </p>
         <Button variant="primary" size="touch" onClick={() => onTryDate(opening)}>Show {monthName(opening)}</Button>
       </Card>
@@ -192,7 +192,10 @@ export function Result({ rec, explanation, writing, portName, date, modeAnswered
             <ul className="flex flex-wrap gap-2" aria-label="What the setup is based on">
               {chips.map((chip) => <li key={chip.text} className="flex"><Badge kind="label" tone={chip.tone}>{chip.text}</Badge></li>)}
             </ul>
-            <button type="button" onClick={onConditions} className="inline-flex h-touch items-center self-start rounded-sm text-accent-text underline underline-offset-2">View conditions</button>
+            <div className="flex flex-wrap gap-x-6">
+              <button type="button" onClick={onEdit} className="inline-flex h-touch items-center rounded-sm text-accent-text underline underline-offset-2">Change conditions</button>
+              <button type="button" onClick={onConditions} className="inline-flex h-touch items-center rounded-sm text-accent-text underline underline-offset-2">View conditions</button>
+            </div>
           </div>
         </Card>
       </div>

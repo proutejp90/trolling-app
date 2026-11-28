@@ -7,11 +7,18 @@ import type { EngineContext, Threshold } from "@recommender/engine";
 import type { Queryable } from "./db";
 import { distanceMi } from "../../seed/geo";
 import type { Wind48h } from "../lib/format";
-import { buildForecastPanel, type ForecastPanel, type MarineRow } from "./forecast-panel";
+import { buildForecastPanel, localDate, type ForecastPanel, type MarineRow } from "./forecast-panel";
 import { sunTimes } from "./sun";
 import { cToF, msToMph, mToFt, round } from "./units";
 
-export type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
+/** The four windows of the first quiz. Still accepted, so stored requests and older clients keep working. */
+export type LegacyTime = "before_sunrise" | "early" | "day" | "after_sunset";
+/** "now" is today at the current time. The other four are for any other day. */
+export type TimeWindow = "now" | "first_light" | "morning" | "midday" | "evening";
+export type TimeOfDay = LegacyTime | TimeWindow;
+export type DayKind = "today" | "forecast" | "beyond" | "past";
+/** Where a prefilled value came from. A value with no data behind it is a Default, never a measurement. */
+export type DataSource = "Measured" | "Forecast" | "Modeled" | "Default";
 
 export interface StationReading {
   station: string; source: string; distance_mi: number; observed_at: string; age_minutes: number;
@@ -41,8 +48,15 @@ export interface Conditions {
   wind_station: string | null;
   /** The last 48 hours of wind as the Conditions screen describes them, whether or not the engine used them. */
   wind_48h: Wind48h;
-  /** Whole days from now to the trip date. */
+  /** Whole days from today at the port to the trip date. Negative for a past date. */
   days_to_trip: number;
+  /** True when the trip date is today at the port. Buoy and probe readings apply to today only. */
+  is_today: boolean;
+  day_kind: DayKind;
+  /** The window the trip time was worked out for. */
+  time_window: TimeOfDay | null;
+  sky_source: DataSource | null;
+  wind_source: DataSource | null;
   /** The freshness thresholds, in hours, so the screens never carry their own numbers. */
   limits: { fresh_hours: number; stale_hours: number; max_miles: number };
   forecast: { valid_at: string; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; hazards: { phenomenon: string; significance: string }[] } | null;
@@ -76,7 +90,7 @@ export interface ForecastRow {
   fetched_at?: Date | null; precip_pct?: number | null; air_temp_c?: number | null;
 }
 
-const TIME_OFFSET: Record<TimeOfDay, { from: "sunrise" | "sunset"; hours: number; light: NonNullable<EngineContext["light_period"]> }> = {
+const TIME_OFFSET: Record<LegacyTime, { from: "sunrise" | "sunset"; hours: number; light: NonNullable<EngineContext["light_period"]> }> = {
   before_sunrise: { from: "sunrise", hours: -1, light: "before_sunrise" },
   early: { from: "sunrise", hours: 1, light: "day" },
   day: { from: "sunrise", hours: 5, light: "day" },
@@ -108,17 +122,37 @@ export function buildConditions(input: {
   const maxMiles = num(thresholds, "station_max_miles", 25);
   const staleHours = num(thresholds, "obs_stale_hours", 6);
   const maxAgeHours = num(thresholds, "obs_max_age_hours", 24);
-  const maxDaysOut = num(thresholds, "trip_max_days_ahead", 2);
+  const timeZone = port.time_zone ?? "America/Detroit";
+  // Today is today at the port, whatever zone the phone or the server is in.
+  const todayAtPort = localDate(now, timeZone);
+  const daysToTrip = Math.round((new Date(`${date}T12:00:00Z`).getTime() - new Date(`${todayAtPort}T12:00:00Z`).getTime()) / 86_400_000);
+  const isToday = daysToTrip === 0;
+  const horizonDays = num(thresholds, "forecast_horizon_days", 5);
+  const dayKind: DayKind = isToday ? "today" : daysToTrip < 0 ? "past" : daysToTrip <= horizonDays ? "forecast" : "beyond";
   const ageMin = (d: Date) => Math.round((now.getTime() - d.getTime()) / 60_000);
 
   // --- Clock: where the trip sits relative to sunrise and sunset ---
   const sun = sunTimes(date, port.lat, port.lon);
   let tripTime: Date | null = null, light: Conditions["light_period"] = null, hoursAfterSunrise: number | null = null;
-  if (sun && timeOfDay) {
-    const o = TIME_OFFSET[timeOfDay];
-    tripTime = new Date(sun[o.from].getTime() + o.hours * 3_600_000);
-    light = o.light;
-    hoursAfterSunrise = round((tripTime.getTime() - sun.sunrise.getTime()) / 3_600_000, 1);
+  const windowTime = (w: TimeOfDay): Date | null => {
+    if (!sun) return null;
+    const rise = sun.sunrise.getTime(), set = sun.sunset.getTime(), h = 3_600_000;
+    if (w === "now") return now;
+    if (w === "first_light") return new Date(rise - 0.5 * h);
+    if (w === "morning") return new Date(rise + 2 * h);
+    if (w === "midday") return new Date((rise + set) / 2);
+    if (w === "evening") return new Date(set - 0.5 * h);
+    return new Date(sun[TIME_OFFSET[w].from].getTime() + TIME_OFFSET[w].hours * h);
+  };
+  // "Now" only means something today. On any other day it is first light.
+  const window: TimeOfDay | null = timeOfDay === "now" && !isToday ? "first_light" : timeOfDay;
+  let lowLight = false;
+  if (sun && window) {
+    tripTime = windowTime(window);
+    light = tripTime! < sun.sunrise ? "before_sunrise" : tripTime! > sun.sunset ? "after_sunset" : "day";
+    hoursAfterSunrise = round((tripTime!.getTime() - sun.sunrise.getTime()) / 3_600_000, 1);
+    const near = num(thresholds, "low_light_minutes", 45) * 60_000;
+    lowLight = light !== "day" || tripTime!.getTime() - sun.sunrise.getTime() <= near || sun.sunset.getTime() - tripTime!.getTime() <= near;
   }
 
   // --- Latest reading per station, nearest first ---
@@ -165,7 +199,6 @@ export function buildConditions(input: {
   });
 
   // --- Water temperature: the fallback ladder, levels 1 and 2 ---
-  const daysOut = Math.abs(new Date(`${date}T12:00:00Z`).getTime() - now.getTime()) / 86_400_000;
   const buoys = latest.filter((o) => o.source !== "nws");
   const inRange = buoys.filter((o) => Number(o.distance_mi) <= maxMiles);
   const usable = inRange.filter((o) => ageMin(o.observed_at) <= maxAgeHours * 60);
@@ -175,8 +208,12 @@ export function buildConditions(input: {
   let source: ObservationRow | undefined;
   if (!input.connected) {
     messages.push("Live water data is not connected. Results use month defaults.");
-  } else if (daysOut > maxDaysOut + 0.5) {
-    messages.push(`Buoy readings describe the water now, not ${Math.round(daysOut)} days away. Results use month defaults.`);
+  } else if (dayKind === "past") {
+    messages.push("This date has passed. It is shown for review, not as advice. Results use month defaults.");
+  } else if (dayKind === "beyond") {
+    messages.push(`Forecasts do not reach ${daysToTrip} days ahead. Results use month defaults.`);
+  } else if (dayKind === "forecast") {
+    messages.push("Buoy readings apply to today only. Results use month defaults.");
   } else if ((input.buoysInRange ?? inRange.length) === 0) {
     messages.push(`No buoy within ${maxMiles} miles of ${port.name} is in the cache. Results use month defaults.`);
   } else if (!usable.length) {
@@ -208,7 +245,7 @@ export function buildConditions(input: {
   // Nearest station with most of the window covered; failing that, the best coverage there is.
   const chosen = histories.filter((h) => h.history.length >= 36).sort((a, b) => a.distance - b.distance)[0] ?? histories.filter((h) => h.history.length >= 24).sort((a, b) => b.history.length - a.history.length)[0];
   const northEast = (h: Conditions["wind_history"]) => h.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
-  const tripIsFar = daysOut > maxDaysOut + 0.5;
+  const tripIsFar = !isToday;
   const best = [...histories].sort((a, b) => b.history.length - a.history.length)[0];
   const wind48h: Wind48h = chosen
     ? { station: chosen.name, hours: chosen.history.length, north_east_hours: northEast(chosen.history), enough: true, used: !tripIsFar }
@@ -228,21 +265,31 @@ export function buildConditions(input: {
 
   // --- Forecast at the trip time ---
   let forecast: Conditions["forecast"] = null, sky: Conditions["sky"] = null, windCalm: boolean | null = null;
+  let skySource: DataSource | null = null, windSource: DataSource | null = null;
+  const calmMaxMph = round(num(thresholds, "wind_calm_max_kt", 5) * 1.15078);
   if (tripTime) {
     const near = input.forecasts.map((f) => ({ f, gap: Math.abs(f.valid_at.getTime() - tripTime!.getTime()) })).filter((x) => x.gap <= 90 * 60_000).sort((a, b) => a.gap - b.gap)[0]?.f;
     if (near) {
       forecast = { valid_at: near.valid_at.toISOString(), sky_cover_pct: near.sky_cover_pct, wind_dir_deg: near.wind_dir_deg, wind_speed_mph: near.wind_speed_ms === null ? null : round(msToMph(Number(near.wind_speed_ms))), hazards: near.hazards ?? [] };
-      if (near.sky_cover_pct !== null) sky = Number(near.sky_cover_pct) >= num(thresholds, "sky_overcast_min_pct", 70) ? "overcast" : "bright";
-      if (forecast.wind_speed_mph !== null) windCalm = forecast.wind_speed_mph <= num(thresholds, "wind_calm_max_mph", 6);
+      if (near.sky_cover_pct !== null) { sky = Number(near.sky_cover_pct) >= num(thresholds, "sky_overcast_min_pct", 70) ? "overcast" : "bright"; skySource = "Forecast"; }
+      if (forecast.wind_speed_mph !== null) { windCalm = forecast.wind_speed_mph <= calmMaxMph; windSource = "Forecast"; }
     } else if (input.connected) {
       messages.push("No forecast covers that time, so sky and wind come from your answers.");
     }
   }
   // Known before a time is chosen, so sky and wind can be asked on the first screen instead of appearing later.
-  const possibleTrips = sun ? Object.values(TIME_OFFSET).map((o) => sun[o.from].getTime() + o.hours * 3_600_000) : [];
+  const possibleTrips = sun ? (["before_sunrise", "early", "day", "after_sunset", "first_light", "morning", "midday", "evening"] as const).map((w) => windowTime(w)!.getTime()) : [];
   const forecastCoversDate = input.forecasts.some((f) => possibleTrips.some((t) => Math.abs(f.valid_at.getTime() - t) <= 90 * 60_000));
-  // In the dark, light is low whatever the cloud cover.
-  if (light === "before_sunrise" || light === "after_sunset") sky = "low_light";
+  // In the dark and close to sunrise or sunset, light is low whatever the cloud cover.
+  // The sun's position is worked out, not measured, so without a forecast behind it the value is a Default.
+  if (lowLight) { sky = "low_light"; skySource ??= "Default"; }
+  // Today the wind is read off the water: the nearest in-range station with a fresh reading beats the forecast.
+  if (isToday) {
+    const freshMin = num(thresholds, "obs_fresh_hours", 3) * 60;
+    const measured = past.filter((o) => o.source !== "nws" && o.wind_speed_ms !== null && Number(o.distance_mi) <= maxMiles && ageMin(o.observed_at) <= freshMin)
+      .sort((a, b) => Number(a.distance_mi) - Number(b.distance_mi) || b.observed_at.getTime() - a.observed_at.getTime())[0];
+    if (measured) { windCalm = round(msToMph(Number(measured.wind_speed_ms))) <= calmMaxMph; windSource = "Measured"; }
+  }
 
   const forecastPanel = buildForecastPanel({
     date, now, timeZone: port.time_zone ?? "America/Detroit", forecasts: input.forecasts, marine: input.marine ?? null,
@@ -258,7 +305,7 @@ export function buildConditions(input: {
     temp_station: source ? { name: source.station_name, source: source.source, distance_mi: Number(source.distance_mi) } : null,
     observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : null,
     stale: source ? !fresh(source) : false,
-    wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: Math.round(daysOut), limits: { fresh_hours: num(thresholds, "obs_fresh_hours", 3), stale_hours: staleHours, max_miles: maxMiles }, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
+    wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: daysToTrip, is_today: isToday, day_kind: dayKind, time_window: window, sky_source: skySource, wind_source: windSource, limits: { fresh_hours: num(thresholds, "obs_fresh_hours", 3), stale_hours: staleHours, max_miles: maxMiles }, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
     light_period: light, hours_after_sunrise: hoursAfterSunrise, sunrise: sun?.sunrise.toISOString() ?? null, sunset: sun?.sunset.toISOString() ?? null,
     messages, readings,
   };

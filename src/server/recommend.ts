@@ -9,14 +9,22 @@ import { agentConfigured, agentModel, callModel } from "./agent/client";
 import { explain, type ModelCall } from "./agent/explain";
 import type { Explanation } from "./agent/schema";
 import { templateExplanation } from "./agent/template";
-import { buildConditions, loadConditions, type Conditions } from "./conditions";
+import { buildConditions, loadConditions, type Conditions, type DataSource, type DayKind, type TimeOfDay } from "./conditions";
+import { confidenceFor } from "./confidence";
 import type { Queryable } from "./db";
 import { bundledRuleset, loadRuleset, type Ruleset } from "./ruleset";
 
 export const recommendInput = z.object({
   port: z.string().min(1).max(80),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Today is always "now". Any other day takes one of the four windows and defaults to first light. */
+  time_window: z.enum(["now", "first_light", "morning", "midday", "evening"]).optional(),
+  /** The first quiz's windows. Still accepted. */
   time_of_day: z.enum(["before_sunrise", "early", "day", "after_sunset"]).optional(),
+  /** Answers the device remembered from an earlier visit, so they are labeled "Your last answer". */
+  remembered: z.array(z.enum(["clarity", "lines"])).max(2).optional(),
+  /** When the remembered clarity answer was given. Past the age limit the server ignores it and asks again. */
+  clarity_answered_at: z.string().datetime().optional(),
   answers: z.object({
     clarity: z.enum(["clear", "stained", "murky", "unknown"]).optional(),
     sky: z.enum(["bright", "overcast", "low_light"]).optional(),
@@ -29,7 +37,17 @@ export const recommendInput = z.object({
 }).strict();
 export type RecommendInput = z.input<typeof recommendInput>;
 
-export type QuestionField = "time_of_day" | "clarity" | "sky" | "wind" | "mode" | "depth";
+export type QuestionField = "clarity" | "sky" | "wind" | "mode" | "depth";
+
+/** One condition as the Quick questions screen shows it: the value in use, where it came from, and what the data said. */
+export interface Prefilled {
+  field: "time_window" | "sky" | "wind" | "clarity" | "mode" | "lines" | "depth";
+  value: string | number | null;
+  source: DataSource | "Your answer" | "Your last answer" | null;
+  /** What the data gave before any answer. Null when no source has this value. */
+  data_value: string | number | null;
+  data_source: DataSource | null;
+}
 
 export interface Recommendation {
   status: "ok" | "needs_input" | "out_of_season";
@@ -40,7 +58,11 @@ export interface Recommendation {
   /** 0 to 5: where the depth came from, after the angler's answers are counted. */
   temp_source_level: number;
   /** Where each input came from, for the result screen. */
-  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "you" | null; depth: string; depth_kind: "buoy" | "break" | "lure" | "default" | null };
+  /** Which day this is and what kind of data it has. */
+  day: { is_today: boolean; kind: DayKind; time_window: TimeOfDay | null; days_to_trip: number; updated_at: string | null };
+  /** Every condition in use, with its source. */
+  prefilled: Prefilled[];
+  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "buoy" | "you" | null; depth: string; depth_kind: "buoy" | "break" | "lure" | "default" | null };
   /** The values the engine ran on, for the chips on the result screen. */
   inputs: { sky: "bright" | "overcast" | "low_light" | null; wind_calm: boolean | null; clarity: "clear" | "stained" | "murky" | "unknown" | null };
   /** What the catalog says about each finish in the spread, by finish id. */
@@ -59,7 +81,7 @@ export interface Recommendation {
 export function cacheKey(input: RecommendInput, now: Date): string {
   const a = input.answers ?? {};
   const answers = Object.fromEntries(Object.entries(a).sort(([x], [y]) => x.localeCompare(y)));
-  return createHash("sha256").update(JSON.stringify([input.port.toLowerCase(), input.date, input.time_of_day ?? null, answers, now.toISOString().slice(0, 13)])).digest("hex").slice(0, 32);
+  return createHash("sha256").update(JSON.stringify([input.port.toLowerCase(), input.date, input.time_window ?? input.time_of_day ?? null, answers, now.toISOString().slice(0, 13)])).digest("hex").slice(0, 32);
 }
 
 export class UnknownPortError extends Error {}
@@ -69,17 +91,23 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   const ruleset = deps.db ? await loadRuleset(deps.db) : bundledRuleset();
   const port = ruleset.ports.find((p) => p.id === input.port || p.name.toLowerCase() === input.port.toLowerCase());
   if (!port) throw new UnknownPortError(`Unknown port: ${input.port}`);
-  const a = input.answers;
+  const a = { ...input.answers };
   const month = Number(input.date.slice(5, 7));
+  // A remembered clarity answer is offered again only while it is recent. Water clears and muddies in days.
+  if (a.clarity && input.remembered?.includes("clarity")) {
+    const maxDays = Number(ruleset.thresholds.find((t) => t.name === "clarity_answer_max_age_days")?.value ?? 3);
+    const age = input.clarity_answered_at ? (deps.now.getTime() - new Date(input.clarity_answered_at).getTime()) / 86_400_000 : Infinity;
+    if (age > maxDays) delete a.clarity;
+  }
 
+  // The time is never asked: today is now, and any other day starts at first light until the angler picks a window.
+  const window: TimeOfDay = input.time_window ?? input.time_of_day ?? "now";
   const conditions = deps.db && port.id
-    ? await loadConditions(deps.db, port, input.date, input.time_of_day ?? null, deps.now, ruleset.thresholds)
-    : buildConditions({ port, date: input.date, timeOfDay: input.time_of_day ?? null, now: deps.now, observations: [], forecasts: [], thresholds: ruleset.thresholds, connected: false });
+    ? await loadConditions(deps.db, port, input.date, window, deps.now, ruleset.thresholds)
+    : buildConditions({ port, date: input.date, timeOfDay: window, now: deps.now, observations: [], forecasts: [], thresholds: ruleset.thresholds, connected: false });
 
-  // The angler's answer beats the forecast: they are looking at the sky.
-  // The one exception is the dark: before sunrise and after sunset the light is low whatever was answered.
-  const dark = conditions.light_period === "before_sunrise" || conditions.light_period === "after_sunset";
-  const sky = dark ? "low_light" : a.sky ?? conditions.sky ?? undefined;
+  // The angler's answer always wins: they are looking at the sky and the water.
+  const sky = a.sky ?? conditions.sky ?? undefined;
   const windCalm = a.wind ? a.wind === "calm" : conditions.wind_calm ?? undefined;
   const useAnglerBreak = conditions.temp_source_level !== 1 && a.break_depth_ft !== undefined;
   const level = conditions.temp_source_level === 1 ? 1 : useAnglerBreak ? 4 : conditions.temp_source_level;
@@ -106,13 +134,10 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
 
   const questions: QuestionField[] = [];
   if (engine.status !== "out_of_season") {
-    if (!input.time_of_day) questions.push("time_of_day");
     if (!a.clarity && (clarityMatters || engine.status !== "ok")) questions.push("clarity");
-    // With a forecast for part of the date, sky and wind wait for the time: the forecast may answer them.
-    // With none, they are asked at once, so nothing is added to the form after the angler starts tapping.
-    const knowWhetherToAsk = Boolean(input.time_of_day) || !conditions.forecast_covers_date;
-    if (!sky && knowWhetherToAsk) questions.push("sky");
-    if (windCalm === undefined && knowWhetherToAsk) questions.push("wind");
+    // Asked only when no source supplied them.
+    if (!sky) questions.push("sky");
+    if (windCalm === undefined) questions.push("wind");
     if (month === 8 && !a.mode) questions.push("mode");
     if (engine.status === "needs_input") questions.push("depth");
   }
@@ -120,35 +145,58 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
 
   // Confidence is computed here, in code. The agent only ever writes the reason.
   const ageHours = conditions.age_minutes === null ? null : conditions.age_minutes / 60;
-  const freshHours = Number(ruleset.thresholds.find((t) => t.name === "obs_fresh_hours")?.value ?? 3);
-  let confidence: Recommendation["confidence"], confidence_reason: string;
-  if (engine.depth_source === "angler") {
-    confidence = "low"; confidence_reason = "Depth is the lure depth you gave, not a measurement.";
-  } else if (level >= 4) {
-    confidence = "low";
-    confidence_reason = level === 4 ? `Depth comes from the break depth you gave. ${conditions.messages[0] ?? ""}`.trim() : conditions.messages[0] ?? "Results use month defaults.";
-  } else {
-    // High also needs an agreeing fishing report from the last 21 days. Reports arrive in Phase 4.
-    confidence = "medium";
-    confidence_reason = `${level === 1 ? "Depth comes from a buoy's temperature profile" : "A buoy gives the surface temperature only"}${ageHours !== null && ageHours > freshHours ? `, read ${Math.round(ageHours)} hours ago` : ""}. No recent fishing report to check it against.`;
-  }
+  const threshold = (name: string, fallback: number) => Number(ruleset.thresholds.find((t) => t.name === name)?.value ?? fallback);
+  const freshHours = threshold("obs_fresh_hours", 3), staleHours = threshold("obs_stale_hours", 6);
+  // A lure depth the angler typed is their answer, level 4 on the ladder, whatever the buoys say.
+  const confidenceLevel = engine.depth_source === "angler" ? 4 : (level as 1 | 2 | 4 | 5);
+  // Reports arrive in Phase 4 and the angler's log in Phase 5b, so nothing raises or lowers a step for agreement yet.
+  const confidence = confidenceFor({ level: confidenceLevel, ageHours, freshHours, staleHours, dayKind: conditions.day_kind, evidence: null });
+  const old = ageHours !== null && ageHours > freshHours ? `, read ${Math.round(ageHours)} hours ago` : "";
+  const confidence_reason =
+    engine.depth_source === "angler" ? "Depth is the lure depth you gave, not a measurement."
+    : level === 4 ? `Depth comes from the break depth you gave. ${conditions.messages[0] ?? ""}`.trim()
+    : level === 5 ? conditions.messages[0] ?? "Results use month defaults."
+    : level === 1 ? `Depth comes from a buoy's temperature profile${old}.${confidence === "high" ? "" : " No recent fishing report to check it against."}`
+    : `A buoy gives the surface temperature only${old}. No recent fishing report to check it against.`;
+
+  // Every condition in use, with where it came from. An answer that differs from the data is an override.
+  const windValue = windCalm === undefined ? null : windCalm ? "calm" : "breezy";
+  const dataWind = conditions.wind_calm === null ? null : conditions.wind_calm ? "calm" : "breezy";
+  const remembered = (f: "clarity" | "lines") => (input.remembered?.includes(f) ? "Your last answer" as const : "Your answer" as const);
+  const answered = <T,>(answer: T | undefined, data: T | null, dataSource: DataSource | null) => (answer !== undefined && answer !== data ? "Your answer" as const : dataSource);
+  const depthKind = engine.depth_source === "angler" ? "lure" : engine.depth_source === "R05" ? (level === 1 ? "buoy" : "break") : engine.depth_source ? "default" : null;
+  const defaultLines = threshold("lines_default", 4);
+  const prefilled: Prefilled[] = [
+    { field: "time_window", value: conditions.time_window, source: input.time_window && input.time_window !== "now" ? "Your answer" : "Default", data_value: conditions.is_today ? "now" : "first_light", data_source: "Default" },
+    { field: "sky", value: sky ?? null, source: answered(a.sky, conditions.sky ?? null, conditions.sky_source), data_value: conditions.sky ?? null, data_source: conditions.sky_source },
+    { field: "wind", value: windValue, source: answered(a.wind, dataWind, conditions.wind_source), data_value: dataWind, data_source: conditions.wind_source },
+    { field: "clarity", value: a.clarity ?? null, source: a.clarity ? remembered("clarity") : null, data_value: null, data_source: null },
+    ...(engine.mode ? [{ field: "mode" as const, value: engine.mode, source: a.mode && month === 8 ? "Your answer" as const : "Default" as const, data_value: month === 8 ? null : engine.mode, data_source: month === 8 ? null : "Default" as const }] : []),
+    { field: "lines", value: a.lines ?? defaultLines, source: a.lines && a.lines !== defaultLines ? remembered("lines") : "Default", data_value: defaultLines, data_source: "Default" },
+    { field: "depth", value: engine.depth_ft ? `${engine.depth_ft.min} to ${engine.depth_ft.max} ft down` : null, source: depthKind === "buoy" ? "Measured" : depthKind === "default" ? "Default" : depthKind ? "Your answer" : null, data_value: null, data_source: null },
+  ];
+  const overrides = prefilled.filter((p) => p.source === "Your answer" && p.data_value !== null && p.data_value !== p.value)
+    .map((p) => ({ field: p.field, answer: p.value, replaced: p.data_value, replaced_source: p.data_source }));
+  const updated = [conditions.observations_at, conditions.forecast_panel.fetched_at].filter((t): t is string => Boolean(t)).sort().at(-1) ?? null;
 
   let recommendation_id: string | null = null;
   if (deps.db && port.id && status === "ok" && deps.store !== false) {
     const { rows } = await deps.db.query(
       `insert into public.recommendations (port_id, requested_for, cache_key, context, engine_output, temp_source_level, confidence, used_fallback)
        values ($1, $2, $3, $4, $5, $6, $7, true) returning id`,
-      [port.id, input.date, cacheKey(input, deps.now), JSON.stringify({ input, context, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), level, confidence],
+      [port.id, input.date, cacheKey(input, deps.now), JSON.stringify({ input, context, overrides, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), level, confidence],
     );
     recommendation_id = rows[0].id;
   }
 
   return {
     status, questions, engine, conditions, temp_source_level: level,
+    day: { is_today: conditions.is_today, kind: conditions.day_kind, time_window: conditions.time_window, days_to_trip: conditions.days_to_trip, updated_at: updated },
+    prefilled,
     sources: {
-      sky: dark ? "time of day" : a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
-      wind: a.wind ? "you" : conditions.wind_calm !== null ? "forecast" : null,
-      depth_kind: engine.depth_source === "angler" ? "lure" : engine.depth_source === "R05" ? (level === 1 ? "buoy" : "break") : engine.depth_source ? "default" : null,
+      sky: a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
+      wind: a.wind ? "you" : conditions.wind_source === "Measured" ? "buoy" : conditions.wind_calm !== null ? "forecast" : null,
+      depth_kind: depthKind,
       depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
     },
     inputs: { sky: sky ?? null, wind_calm: windCalm ?? null, clarity: a.clarity ?? null },

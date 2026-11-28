@@ -72,7 +72,20 @@ describe("water temperature ladder", () => {
   it("does not use today's water for a trip a week out", () => {
     const c = build([obs({ observed_at: hoursAgo(1), temp_profile: profile, water_temp_c: 20 })], { date: "2026-07-22" });
     expect(c.temp_source_level).toBe(5);
-    expect(c.messages[0]).toMatch(/not 7 days away/);
+    expect(c.messages[0]).toBe("Forecasts do not reach 7 days ahead. Results use month defaults.");
+    expect(c).toMatchObject({ day_kind: "beyond", is_today: false, days_to_trip: 7 });
+  });
+
+  it("buoy readings apply to today only: tomorrow falls to month defaults and says so", () => {
+    const c = build([obs({ observed_at: hoursAgo(1), temp_profile: profile, water_temp_c: 20 })], { date: "2026-07-16" });
+    expect(c).toMatchObject({ temp_source_level: 5, day_kind: "forecast", is_today: false, days_to_trip: 1 });
+    expect(c.messages[0]).toBe("Buoy readings apply to today only. Results use month defaults.");
+  });
+
+  it("a past date is labeled as past and uses no live data", () => {
+    const c = build([obs({ observed_at: hoursAgo(1), temp_profile: profile, water_temp_c: 20 })], { date: "2026-07-14" });
+    expect(c).toMatchObject({ temp_source_level: 5, day_kind: "past", days_to_trip: -1 });
+    expect(c.messages[0]).toBe("This date has passed. It is shown for review, not as advice. Results use month defaults.");
   });
 
   it("fills a partial newest report from the same station's earlier rows", () => {
@@ -247,5 +260,69 @@ describe("what the Conditions screen says about wind history", () => {
   it("says how many hours there are when it is short of a day", () => {
     expect(build(windRows("Muskegon Buoy", "ndbc", 3.5, 6, 20)).wind_48h).toEqual({ station: "Muskegon Buoy", hours: 6, north_east_hours: null, enough: false, used: false });
     expect(build([]).wind_48h).toEqual({ station: null, hours: 0, north_east_hours: null, enough: false, used: false });
+  });
+});
+
+describe("day selection and time windows", () => {
+  it("G39: today is today at the port, not on the phone", () => {
+    // 12:30 a.m. Eastern on the 16th is 11:30 p.m. Central on the 15th.
+    const late = new Date("2026-07-16T04:30:00Z");
+    const central = buildConditions({ port: { ...port, time_zone: "America/Chicago" }, date: "2026-07-15", timeOfDay: "now", now: late, observations: [], forecasts: [], thresholds, connected: true });
+    expect(central).toMatchObject({ is_today: true, day_kind: "today" });
+    const eastern = buildConditions({ port: { ...port, time_zone: "America/Detroit" }, date: "2026-07-15", timeOfDay: "now", now: late, observations: [], forecasts: [], thresholds, connected: true });
+    expect(eastern).toMatchObject({ is_today: false, day_kind: "past" });
+  });
+
+  it("G34: today's window is now, read off the actual hour", () => {
+    const c = build([], { timeOfDay: "now" });
+    expect(c.trip_time).toBe(now.toISOString());
+    expect(c).toMatchObject({ time_window: "now", light_period: "day" });
+    const night = buildConditions({ port, date: "2026-07-15", timeOfDay: "now", now: new Date("2026-07-15T08:00:00Z"), observations: [], forecasts: [], thresholds, connected: true }); // 4 a.m.
+    expect(night).toMatchObject({ light_period: "before_sunrise", sky: "low_light", sky_source: "Default" });
+  });
+
+  it("places the four windows around sunrise and sunset, and turns now into first light on another day", () => {
+    const at = (w: "first_light" | "morning" | "midday" | "evening" | "now") => build([], { timeOfDay: w, date: "2026-07-16" });
+    const sunrise = new Date(at("morning").sunrise!).getTime(), sunset = new Date(at("morning").sunset!).getTime();
+    const offset = (c: ReturnType<typeof build>) => (new Date(c.trip_time!).getTime() - sunrise) / 3_600_000;
+    expect(offset(at("first_light"))).toBe(-0.5);
+    expect(offset(at("morning"))).toBe(2);
+    expect(new Date(at("midday").trip_time!).getTime()).toBe((sunrise + sunset) / 2);
+    expect(new Date(at("evening").trip_time!).getTime()).toBe(sunset - 1_800_000);
+    expect(at("now")).toMatchObject({ time_window: "first_light", light_period: "before_sunrise" });
+    expect(at("first_light").sky).toBe("low_light");
+    expect(at("evening")).toMatchObject({ sky: "low_light", light_period: "day" }); // within 45 minutes of sunset
+    expect(at("morning").sky).toBeNull(); // daylight with no forecast: nothing to prefill
+  });
+
+  const cover = (c: ReturnType<typeof build>, pct: number, windMs: number | null = null) => [{ valid_at: new Date(c.trip_time!), sky_cover_pct: pct, wind_dir_deg: 200, wind_speed_ms: windMs, hazards: [] }];
+
+  it("G41: today, sky and wind are prefilled from the forecast and the buoy, each with its source", () => {
+    const base = build([], { timeOfDay: "now" });
+    const kt = 0.514444;
+    const c = build([obs({ observed_at: hoursAgo(0.5), wind_speed_ms: 3 * kt, wind_dir_deg: 200 })], { timeOfDay: "now", forecasts: cover(base, 15, 8) });
+    expect(c).toMatchObject({ sky: "bright", sky_source: "Forecast", wind_calm: true, wind_source: "Measured" }); // the forecast said breezy; the buoy is on the water
+  });
+
+  it("reads calm at 5 knots and under, from the buoy today and the forecast otherwise", () => {
+    const kt = 0.514444, base = build([], { timeOfDay: "now" });
+    const buoy = (knots: number) => build([obs({ observed_at: hoursAgo(0.5), wind_speed_ms: knots * kt, wind_dir_deg: 200 })], { timeOfDay: "now" }).wind_calm;
+    expect([buoy(4.9), buoy(5), buoy(5.2)]).toEqual([true, true, false]);
+    // A buoy reading over three hours old is not "now": the forecast is used.
+    expect(build([obs({ observed_at: hoursAgo(4), wind_speed_ms: 1, wind_dir_deg: 200 })], { timeOfDay: "now", forecasts: cover(base, 15, 8) })).toMatchObject({ wind_calm: false, wind_source: "Forecast" });
+    // An airport is not on the water.
+    expect(build([obs({ source: "nws", station_name: "Airport", observed_at: hoursAgo(0.5), wind_speed_ms: 1, wind_dir_deg: 200 })], { timeOfDay: "now" }).wind_source).toBeNull();
+    // Tomorrow has no buoy reading to use.
+    const tomorrow = build([], { timeOfDay: "morning", date: "2026-07-16" });
+    expect(build([obs({ observed_at: hoursAgo(0.5), wind_speed_ms: 1, wind_dir_deg: 200 })], { timeOfDay: "morning", date: "2026-07-16", forecasts: cover(tomorrow, 15, 8) })).toMatchObject({ wind_calm: false, wind_source: "Forecast" });
+  });
+
+  it("G46: tomorrow at first light the sky is low light whatever the cloud, labeled Forecast", () => {
+    const first = build([], { timeOfDay: "first_light", date: "2026-07-16" });
+    expect(build([], { timeOfDay: "first_light", date: "2026-07-16", forecasts: cover(first, 80) })).toMatchObject({ sky: "low_light", sky_source: "Forecast" });
+  });
+
+  it("G47: with no forecast in daylight, sky is unknown and nothing is called measured", () => {
+    expect(build([], { timeOfDay: "now" })).toMatchObject({ sky: null, sky_source: null, wind_calm: null, wind_source: null });
   });
 });

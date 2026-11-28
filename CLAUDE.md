@@ -1,6 +1,6 @@
 # Conditions recommender
 
-Mobile web app that gives a Lake Michigan salmon troller a starting spread: which lures, how deep, how fast, and why. The build spec is the authority; DECISIONS.md records every choice it left open.
+Mobile web app that gives a Lake Michigan salmon troller a starting spread: which lures, how deep, how fast, and why. The build spec (`docs/BUILD-SPEC.md`) is the authority; DECISIONS.md records every choice it left open.
 
 ## Rules that never bend
 - The engine decides and the LLM explains. The LLM never states a depth, speed, color or lure the engine did not return.
