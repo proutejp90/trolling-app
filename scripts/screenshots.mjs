@@ -1,14 +1,14 @@
 // Screenshots of every angler screen at phone and desktop width, in both themes.
-// Usage: start the app on the autumn fixtures, then: node scripts/screenshots.cjs http://localhost:3225 docs/ui-review/part-e
-const { chromium } = require("playwright");
+// Usage: start the app on the autumn fixtures, then: node scripts/screenshots.mjs http://localhost:3225 docs/ui-review/part-e
+import { chromium } from "playwright";
 
 const [base, out] = process.argv.slice(2);
-(async () => {
+const run = async () => {
   const browser = await chromium.launch();
   for (const width of [390, 1440]) {
     for (const theme of ["dark", "light"]) {
       const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 900 }, deviceScaleFactor: width === 390 ? 2 : 1 });
-      await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
+      await page.addInitScript((t) => globalThis.localStorage.setItem("theme", t), theme);
       await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
       const shot = (name) => page.screenshot({ path: `${out}/${name}-${width}-${theme}.png`, fullPage: true });
       await page.goto(base);
@@ -42,4 +42,5 @@ const [base, out] = process.argv.slice(2);
     }
   }
   await browser.close();
-})();
+};
+await run();

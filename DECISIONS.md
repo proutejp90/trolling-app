@@ -237,7 +237,7 @@ Where the doc's own parts pull against each other, and what was chosen:
 - **Finish traits** come from the catalog: "Glow" and "UV" from the finish's types, "House brand" from the lure. **The shop link on house-brand rows is not built**: the catalog has no shop URLs yet.
 - **"Your log" tag chip** has no reasons to attach to until Phase 5b.
 - **Zone labels** are `h2` in `micro`; card titles under them are `h3`. On the questions screen the three cards are the zones, so their titles are `h2` at `title-3`.
-- **Screenshots** are in `docs/ui-review/part-e`, made by `scripts/screenshots.cjs` on the autumn fixtures. Contrast is checked by `scripts/contrast.mjs`.
+- **Screenshots** are in `docs/ui-review/part-e`, made by `scripts/screenshots.mjs` on the autumn fixtures. Contrast is checked by `scripts/contrast.mjs`.
 
 ## Still open for later phases
 
