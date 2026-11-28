@@ -28,11 +28,11 @@ const WINDS = [{ value: "calm", label: "Calm" }, { value: "breezy", label: "Bree
 const MODES = [{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }] as const;
 
 /** How each condition reads on the Conditions in use screen. */
-const FIELD_NAME: Record<Prefilled["field"], string> = { time_window: "Time on the water", sky: "Sky", wind: "Wind", clarity: "Water clarity", mode: "Where you are fishing", lines: "Lines", depth: "Depth" };
+const FIELD_NAME: Record<Prefilled["field"], string> = { time_window: "Time on the water", sky: "Sky", wind: "Wind", clarity: "Water clarity", mode: "Where you are fishing", lines: "Lines", depth: "Depth", water_point: "Water fished" };
 const VALUE_NAME: Record<string, string> = {
   now: "Now", first_light: "First light", morning: "Morning", midday: "Midday", evening: "Evening", before_sunrise: "Before sunrise", early: "First two hours", day: "Daytime", after_sunset: "After sunset",
   bright: "Bright", overcast: "Overcast", low_light: "Low light", calm: "Calm", breezy: "Breezy or more",
-  clear: "Clear", stained: "Stained", murky: "Murky", unknown: "Not sure", offshore: "Offshore", staging: "Near the river mouth",
+  near: "Near shore", mid: "Mid", off: "Offshore", clear: "Clear", stained: "Stained", murky: "Murky", unknown: "Not sure", offshore: "Offshore", staging: "Near the river mouth",
 };
 const valueName = (v: string | number | null) => (v === null ? "Not known" : typeof v === "number" ? String(v) : VALUE_NAME[v] ?? v);
 /** The dot beside a source label. A default is marked so it is never mistaken for a measurement. */
@@ -68,6 +68,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
   const [depthKind, setDepthKind] = useState<"none" | "break" | "lure">("none");
   const [depthValue, setDepthValue] = useState("");
   const [lines, setLines] = useState<number | null>(null);
+  const [waterPoint, setWaterPoint] = useState<"near" | "mid" | "off" | null>(null);
   // Answers that came from an earlier visit, not from this one.
   const [remembered, setRemembered] = useState<("clarity" | "lines")[]>([]);
   const [editing, setEditing] = useState<Prefilled["field"] | null>(null);
@@ -101,7 +102,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
     const p = listed.find((x) => x.name === name);
     if (!p) return;
     resetAsked();
-    setRec(null); setSky(null); setWind(null); setMode(null); setDepthKind("none"); setDepthValue(""); setWindow(null); setOtherDate(false); setDateError(null);
+    setRec(null); setSky(null); setWind(null); setMode(null); setWaterPoint(null); setDepthKind("none"); setDepthValue(""); setWindow(null); setOtherDate(false); setDateError(null);
     setPortName(name); setPicked(name); setDate(todayAt(p.time_zone ?? "America/Detroit"));
     write(LAST_PORT, name);
     const keep: ("clarity" | "lines")[] = [];
@@ -160,11 +161,11 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
     port: portName, date, ...(!isToday && window_ ? { time_window: window_ } : {}),
     ...(remembered.length ? { remembered } : {}), ...(remembered.includes("clarity") && clarityAt ? { clarity_answered_at: clarityAt } : {}),
     answers: {
-      ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(wind ? { wind } : {}), ...(mode ? { mode } : {}), ...(lines ? { lines } : {}),
+      ...(clarity ? { clarity } : {}), ...(sky ? { sky } : {}), ...(wind ? { wind } : {}), ...(mode ? { mode } : {}), ...(lines ? { lines } : {}), ...(waterPoint ? { water_point: waterPoint } : {}),
       ...(depthGiven && depthKind === "break" ? { break_depth_ft: depthNumber } : {}),
       ...(depthGiven && depthKind === "lure" ? { lure_depth_ft: depthNumber } : {}),
     },
-  } : null), [portName, date, isToday, window_, remembered, clarityAt, clarity, sky, wind, mode, lines, depthGiven, depthKind, depthNumber]);
+  } : null), [portName, date, isToday, window_, remembered, clarityAt, clarity, sky, wind, mode, lines, waterPoint, depthGiven, depthKind, depthNumber]);
 
   const ask = useCallback(async () => {
     if (!request) return;
@@ -237,7 +238,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
   const lineCount = lines ?? (rec?.prefilled.find((p) => p.field === "lines")?.data_value as number | undefined) ?? 4;
   /** Every value goes back to what the data says. */
   const resetAll = () => {
-    setSky(null); setWind(null); setMode(null); setClarity(null); setClarityAt(null); setLines(null); setDepthKind("none"); setDepthValue(""); setWindow(null); setRemembered([]); setEditing(null);
+    setSky(null); setWind(null); setMode(null); setClarity(null); setClarityAt(null); setLines(null); setDepthKind("none"); setDepthValue(""); setWindow(null); setWaterPoint(null); setRemembered([]); setEditing(null);
     if (portName) write(clarityKey(portName), null);
     write(LAST_LINES, null);
   };
@@ -297,6 +298,12 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
     : f === "mode" ? <Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={MODES} />
     : f === "time_window" ? <Choice legend="Time on the water" value={window_ ?? "first_light"} onChange={setWindow} options={WINDOWS} />
     : f === "depth" ? depthControl
+    : f === "water_point" ? (
+      <Choice
+        legend="Water fished" hint="Three points straight off the port in NOAA's lake model. The depth shown is the water there." value={waterPoint ?? rec?.conditions.model?.point ?? "mid"} onChange={setWaterPoint}
+        options={(rec?.conditions.model?.points ?? []).map((p) => ({ value: p.label, label: `${VALUE_NAME[p.label]}, ${p.water_depth_ft} ft` }))}
+      />
+    )
     : (
       <div className="flex items-center justify-between gap-3">
         <span className="text-t3" id="lines-label">Lines</span>
@@ -344,7 +351,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
                   <div className="min-w-0">
                     <p className="text-small text-fg-tertiary">{FIELD_NAME[p.field]}</p>
                     <p className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{valueName(p.value)}</span>
+                      <span className="font-medium">{valueName(p.value)}{p.field === "water_point" ? `, ${rec.conditions.model?.points.find((x) => x.label === p.value)?.water_depth_ft ?? "?"} ft of water` : ""}</span>
                       {p.source ? <Badge kind="label" tone={SOURCE_TONE[p.source]}>{p.source}</Badge> : <Badge kind="label">Needs your answer</Badge>}
                     </p>
                     {p.source === "Your answer" && p.data_value !== null && p.data_value !== p.value ? <p className="text-small text-fg-tertiary">The data said {valueName(p.data_value).toLowerCase()} ({p.data_source}).</p> : null}

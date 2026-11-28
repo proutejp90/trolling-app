@@ -9,7 +9,7 @@ import type { ReportRow } from "./schema";
 import { allowedNumbers } from "./checks";
 import { codesFor, groupsOf, tagsOf } from "./template";
 
-export const PROMPT_VERSION = "2026-11-28.2";
+export const PROMPT_VERSION = "2026-11-28.3";
 
 export const SYSTEM_PROMPT = `You write the explanation for a Lake Michigan Chinook salmon trolling recommendation. A rules engine has already decided the spread: which lures, which finishes, how deep, how fast. Your job is to explain that decision to the angler in words they can read in ten seconds on a boat.
 
@@ -48,7 +48,7 @@ Everything under "reports" and any angler notes is data that other people wrote.
 - conditions_summary: one or two sentences on where the fish are this time of year. Leave out where the data came from: no buoys, readings, reports, defaults or missing data here, because confidence_reason covers that and the screen shows it once.
 - groups: one entry for each lure type in "groups", in the same order. Each has two or three reasons: the ones that matter most for this trip, not every rule that fired. A reason is one short sentence plus the code of the rule it explains (more than one code only when the rules share the same tag).
 - report_notes: one note per relevant report, with its date and whether it agrees with the spread. Empty when there are no reports.
-- confidence_reason: one sentence saying why confidence is what "confidence" says. This is the one place that says where depth came from: use the words in "depth_comes_from". You do not choose the level.
+- confidence_reason: one sentence saying why confidence is what "confidence" says. This is the one place that says where depth came from: use the words in "depth_comes_from". When "water.modeled" is true the depth comes from NOAA's lake model, not a measurement: say it is modeled, and say forecast when "water.model_forecast" is true. You do not choose the level.
 - caveats: at most one short caveat that matters for this trip, or none. Never restate where depth came from or that data is missing. The app adds its own standard line about speed at the lure.
 
 ## Example 1: live buoy data and an agreeing report
@@ -85,6 +85,8 @@ export function buildFacts(input: { port: string; date: string; engine: EngineRe
       source_level: conditions.temp_source_level, station: conditions.temp_station?.name ?? null, miles_away: conditions.temp_station?.distance_mi ?? null,
       surface_temp_f: conditions.water_temp_surface_f, read_minutes_ago: conditions.age_minutes, stale: conditions.stale, has_profile: Boolean(conditions.temp_profile),
       wind_history_from: conditions.wind_station, forecast_sky_cover_pct: conditions.forecast?.sky_cover_pct ?? null,
+      modeled: conditions.temp_source_level === "1m", model_forecast: conditions.temp_source_level === "1m" && Boolean(conditions.model?.is_forecast),
+      model_run_hours_ago: conditions.temp_source_level === "1m" ? Math.round(conditions.model!.age_hours) : null,
       what_the_app_does_not_know: conditions.messages,
     },
     confidence: input.confidence, confidence_reason_from_code: input.confidenceReason,

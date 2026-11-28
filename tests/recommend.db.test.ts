@@ -49,7 +49,7 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     expect(answered.engine.depth_ft).toEqual({ min: 60, max: 80 });
     expect(answered.recommendation_id).toMatch(/^[0-9a-f-]{36}$/);
     const stored = await db.query("select temp_source_level, confidence, requested_for::text from public.recommendations where id = $1", [answered.recommendation_id]);
-    expect(stored.rows[0]).toEqual({ temp_source_level: 4, confidence: "low", requested_for: "2026-10-14" });
+    expect(stored.rows[0]).toEqual({ temp_source_level: "4", confidence: "low", requested_for: "2026-10-14" });
   });
 
   it("winter: with every buoy pulled it falls to level 5 and says so", async () => {

@@ -9,6 +9,8 @@ import type { SeagullMeta } from "../../../seed/stations";
 import { distanceMi } from "../../../seed/geo";
 import type { Queryable } from "../db";
 import { fetchNdbc } from "../sources/ndbc";
+import type { Threshold } from "@recommender/engine";
+import { recordModelChecks } from "./model";
 import { fetchAlerts, fetchGrid, fetchNearshoreProduct, fetchPoint, fetchStationList, fetchStationObservations, parseNearshore, type ForecastHour } from "../sources/nws";
 import { fetchSeagull } from "../sources/seagull";
 import { hourly, type Reading } from "../sources/types";
@@ -187,6 +189,14 @@ export async function refreshConditions(q: Queryable, now: Date): Promise<Refres
     } catch (err) {
       summary.errors.push(`NWS observations ${s.external_id}: ${(err as Error).message}`);
     }
+  }
+
+  // With new readings in, compare any buoy profile with the lake model beside it.
+  try {
+    const thresholds = (await q.query("select name, value from public.thresholds")).rows as Threshold[];
+    await recordModelChecks(q, thresholds, now);
+  } catch (err) {
+    summary.errors.push(`Model checks: ${(err as Error).message}`);
   }
 
   await q.query("delete from public.observations where observed_at < $1", [new Date(now.getTime() - PRUNE_DAYS * 86_400_000)]);

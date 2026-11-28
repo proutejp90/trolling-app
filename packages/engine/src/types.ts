@@ -14,9 +14,15 @@ export interface EngineContext {
   shore: "east" | "west";
   /** The angler's choice, when given. Otherwise the location rule sets it. */
   mode?: Mode;
-  /** 0 the angler's probe, 1 buoy profile, 2 buoy surface, 3 report, 4 the angler's answer, 5 month defaults. */
-  temp_source_level: 0 | 1 | 2 | 3 | 4 | 5;
+  /** 0 the angler's probe, 1 buoy profile, "1m" NOAA's lake model, 2 buoy surface, 3 report, 4 the angler's answer, 5 month defaults. */
+  temp_source_level: 0 | 1 | "1m" | 2 | 3 | 4 | 5;
   temp_profile?: { depth_ft: number; temp_f: number }[];
+  /**
+   * How coarse the profile is, in feet: one model layer's thickness. When set, the depth range
+   * from the profile is widened by this much, half above the start and half below, so a modeled
+   * break is never stated more finely than the model resolves it.
+   */
+  profile_resolution_ft?: number;
   break_depth_ft?: number;
   /** A lure depth the angler states outright. It replaces the Depth stage. */
   lure_depth_ft?: number;

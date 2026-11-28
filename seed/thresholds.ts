@@ -63,6 +63,8 @@ export const thresholds: Threshold[] = [
 
   // The lake model
   t("model_max_age_h", 12, "h", "The lake model is skipped when its latest run is older than this."),
+  t("model_upwelling_drop_f", 2, "°F", "How much colder the near-shore surface must be than a day earlier, with the cold layer a model layer shallower, to read an upwelling from the lake model.", true),
+  t("model_check_max_miles", 5, "mi", "A buoy profile is compared with the lake model at a sample point within this distance.", true),
   t("model_agree_ft", 10, "ft", "A buoy or probe within this of the model's break depth raises model confidence to high.", true),
 
   // The forecast panel

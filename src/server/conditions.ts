@@ -8,6 +8,7 @@ import type { Queryable } from "./db";
 import { distanceMi } from "../../seed/geo";
 import type { Wind48h } from "../lib/format";
 import { buildForecastPanel, localDate, type ForecastPanel, type MarineRow } from "./forecast-panel";
+import { modelView, type ModelRow, type ModelView, type PointLabel } from "./model";
 import { sunTimes } from "./sun";
 import { cToF, msToMph, mToFt, round } from "./units";
 
@@ -36,8 +37,10 @@ export interface Conditions {
   port: { id: string | null; name: string; shore: "east" | "west"; lat: number; lon: number };
   now: string;
   trip_time: string | null;
-  /** 1 buoy profile, 2 buoy surface temperature, 5 nothing live. Levels 3 and 4 are set by the recommend step. */
-  temp_source_level: 1 | 2 | 5;
+  /** 1 buoy profile, "1m" NOAA's lake model, 2 buoy surface temperature, 5 nothing live. Levels 3 and 4 are set by the recommend step. */
+  temp_source_level: 1 | "1m" | 2 | 5;
+  /** NOAA's lake model for this trip, whenever a recent run covers it, whether or not the depth came from it. Always modeled, never measured. */
+  model: ModelView | null;
   water_temp_surface_f: number | null;
   temp_profile: { depth_ft: number; temp_f: number }[] | null;
   temp_station: { name: string; source: string; distance_mi: number } | null;
@@ -97,6 +100,26 @@ const TIME_OFFSET: Record<LegacyTime, { from: "sunrise" | "sunset"; hours: numbe
   after_sunset: { from: "sunset", hours: 0.75, light: "after_sunset" },
 };
 
+type Sun = ReturnType<typeof sunTimes>;
+/** When a time window falls on the clock, from that day's sunrise and sunset. */
+function windowMoment(sun: Sun, w: TimeOfDay, now: Date): Date | null {
+  if (!sun) return null;
+  const rise = sun.sunrise.getTime(), set = sun.sunset.getTime(), h = 3_600_000;
+  if (w === "now") return now;
+  if (w === "first_light") return new Date(rise - 0.5 * h);
+  if (w === "morning") return new Date(rise + 2 * h);
+  if (w === "midday") return new Date((rise + set) / 2);
+  if (w === "evening") return new Date(set - 0.5 * h);
+  return new Date(sun[TIME_OFFSET[w].from].getTime() + TIME_OFFSET[w].hours * h);
+}
+
+/** The moment a trip is planned for. "Now" on any day but today at the port means first light. */
+export function tripMoment(port: PortRow, date: string, timeOfDay: TimeOfDay | null, now: Date): Date | null {
+  if (!timeOfDay) return null;
+  const isToday = localDate(now, port.time_zone ?? "America/Detroit") === date;
+  return windowMoment(sunTimes(date, port.lat, port.lon), timeOfDay === "now" && !isToday ? "first_light" : timeOfDay, now);
+}
+
 const num = (thresholds: Threshold[], name: string, fallback: number) => {
   const v = thresholds.find((t) => t.name === name)?.value;
   return typeof v === "number" ? v : fallback;
@@ -116,6 +139,10 @@ export function buildConditions(input: {
   buoysInRange?: number;
   /** The port's marine forecast text and alerts, when the cache has them. */
   marine?: MarineRow | null;
+  /** Lake model profiles near the trip time, now, and a day before the trip. */
+  model?: ModelRow[];
+  /** The sample point the angler fishes: near, mid or offshore. Mid unless they say. */
+  waterPoint?: PointLabel;
 }): Conditions {
   const { port, date, timeOfDay, now, thresholds } = input;
   const messages: string[] = [];
@@ -134,16 +161,7 @@ export function buildConditions(input: {
   // --- Clock: where the trip sits relative to sunrise and sunset ---
   const sun = sunTimes(date, port.lat, port.lon);
   let tripTime: Date | null = null, light: Conditions["light_period"] = null, hoursAfterSunrise: number | null = null;
-  const windowTime = (w: TimeOfDay): Date | null => {
-    if (!sun) return null;
-    const rise = sun.sunrise.getTime(), set = sun.sunset.getTime(), h = 3_600_000;
-    if (w === "now") return now;
-    if (w === "first_light") return new Date(rise - 0.5 * h);
-    if (w === "morning") return new Date(rise + 2 * h);
-    if (w === "midday") return new Date((rise + set) / 2);
-    if (w === "evening") return new Date(set - 0.5 * h);
-    return new Date(sun[TIME_OFFSET[w].from].getTime() + TIME_OFFSET[w].hours * h);
-  };
+  const windowTime = (w: TimeOfDay) => windowMoment(sun, w, now);
   // "Now" only means something today. On any other day it is first light.
   const window: TimeOfDay | null = timeOfDay === "now" && !isToday ? "first_light" : timeOfDay;
   let lowLight = false;
@@ -206,6 +224,13 @@ export function buildConditions(input: {
   const pick = (ok: (o: ObservationRow) => boolean) => usable.filter(ok).sort((a, b) => Number(fresh(b)) - Number(fresh(a)) || a.distance_mi - b.distance_mi)[0];
   let level: Conditions["temp_source_level"] = 5;
   let source: ObservationRow | undefined;
+  // NOAA's lake model: used when no buoy profile is, for today and for the days its forecast reaches.
+  const { view: model, stale_hours: modelStaleHours } = modelView({
+    rows: input.model ?? [], tripTime, now, point: input.waterPoint ?? "mid",
+    maxAgeHours: num(thresholds, "model_max_age_h", 12), upwellingDropF: num(thresholds, "model_upwelling_drop_f", 2),
+  });
+  const modelPoint = model?.points.find((p) => p.label === model.point) ?? null;
+  const profileBuoy = isToday && usable.length ? pick((o) => (o.temp_profile?.length ?? 0) >= 3) : undefined;
   if (!input.connected) {
     messages.push("Live water data is not connected. Results use month defaults.");
   } else if (dayKind === "past") {
@@ -213,15 +238,20 @@ export function buildConditions(input: {
   } else if (dayKind === "beyond") {
     messages.push(`Forecasts do not reach ${daysToTrip} days ahead. Results use month defaults.`);
   } else if (dayKind === "forecast") {
-    messages.push("Buoy readings apply to today only. Results use month defaults.");
+    if (modelPoint) { level = "1m"; messages.push("Water temperature is NOAA's lake model forecast for that day. It is modeled, not measured."); }
+    else messages.push("Buoy readings apply to today only. Results use month defaults.");
+  } else if (profileBuoy) {
+    source = profileBuoy; level = 1;
+    if (!fresh(source)) messages.push(`The newest water reading is more than ${staleHours} hours old.`);
+  } else if (modelPoint) {
+    level = "1m";
+    messages.push(usable.length ? "No buoy nearby reports temperature at depth, so depth comes from NOAA's lake model. It is modeled, not measured." : "Measured water data is unavailable until buoys return. Depth comes from NOAA's lake model.");
   } else if ((input.buoysInRange ?? inRange.length) === 0) {
     messages.push(`No buoy within ${maxMiles} miles of ${port.name} is in the cache. Results use month defaults.`);
   } else if (!usable.length) {
     messages.push("Live water data is unavailable until buoys return. Results use month defaults.");
   } else {
-    source = pick((o) => (o.temp_profile?.length ?? 0) >= 3);
-    if (source) level = 1;
-    else if ((source = pick((o) => o.water_temp_c !== null))) {
+    if ((source = pick((o) => o.water_temp_c !== null))) {
       level = 2;
       messages.push("No buoy nearby reports temperature at depth right now, only at the surface.");
     } else {
@@ -229,6 +259,8 @@ export function buildConditions(input: {
     }
     if (source && !fresh(source)) messages.push(`The newest water reading is more than ${staleHours} hours old.`);
   }
+
+  if (modelStaleHours !== null && level !== 1 && (dayKind === "today" || dayKind === "forecast")) messages.push(`NOAA's lake model was last run ${modelStaleHours} hours ago, so it was not used.`);
 
   // --- Wind history for the upwelling rule: hourly directions over the last 48 hours ---
   let windHistory: Conditions["wind_history"] = [], windStation: string | null = null;
@@ -300,10 +332,11 @@ export function buildConditions(input: {
   return {
     forecast_panel: forecastPanel,
     port, now: now.toISOString(), trip_time: tripTime?.toISOString() ?? null, temp_source_level: level,
-    water_temp_surface_f: source?.water_temp_c == null ? null : round(cToF(source.water_temp_c)),
-    temp_profile: level === 1 ? toFeet(source!.temp_profile) : null,
+    model,
+    water_temp_surface_f: level === "1m" ? modelPoint!.surface_temp_f : source?.water_temp_c == null ? null : round(cToF(source.water_temp_c)),
+    temp_profile: level === 1 ? toFeet(source!.temp_profile) : level === "1m" ? modelPoint!.profile : null,
     temp_station: source ? { name: source.station_name, source: source.source, distance_mi: Number(source.distance_mi) } : null,
-    observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : null,
+    observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : level === "1m" ? Math.round(model!.age_hours * 60) : null,
     stale: source ? !fresh(source) : false,
     wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: daysToTrip, is_today: isToday, day_kind: dayKind, time_window: window, sky_source: skySource, wind_source: windSource, limits: { fresh_hours: num(thresholds, "obs_fresh_hours", 3), stale_hours: staleHours, max_miles: maxMiles }, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
     light_period: light, hours_after_sunrise: hoursAfterSunrise, sunrise: sun?.sunrise.toISOString() ?? null, sunset: sun?.sunset.toISOString() ?? null,
@@ -312,7 +345,7 @@ export function buildConditions(input: {
 }
 
 /** Reads the cache for a port. Rows come back in metric; buildConditions converts. */
-export async function loadConditions(q: Queryable, port: PortRow, date: string, timeOfDay: TimeOfDay | null, now: Date, thresholds: Threshold[]): Promise<Conditions> {
+export async function loadConditions(q: Queryable, port: PortRow, date: string, timeOfDay: TimeOfDay | null, now: Date, thresholds: Threshold[], waterPoint?: PointLabel): Promise<Conditions> {
   const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const obs = await q.query(
     `select s.name as station_name, s.source, s.lat, s.lon, ps.distance_mi, ps.rank, o.observed_at, o.wind_dir_deg, o.wind_speed_ms, o.wave_height_m, o.wave_period_s, o.air_temp_c, o.water_temp_c, o.temp_profile
@@ -332,8 +365,19 @@ export async function loadConditions(q: Queryable, port: PortRow, date: string, 
     [port.id, new Date(noon.getTime() - 18 * 3_600_000), new Date(noon.getTime() + 18 * 3_600_000)],
   );
   const zone = await q.query("select zone, forecast_text, issued_at, text_fetched_at, alerts, alerts_fetched_at from public.marine_forecasts where port_id = $1", [port.id]);
+  // The lake model at three moments: the trip, now (for the trend), and a day before the trip (for an upwelling).
+  const trip = tripMoment(port, date, timeOfDay, now);
+  const around = (t: Date) => [new Date(t.getTime() - 45 * 60_000), new Date(t.getTime() + 45 * 60_000)];
+  const moments = trip ? [...around(trip), ...around(now), ...around(new Date(trip.getTime() - 24 * 3_600_000))] : [];
+  const modelRows = trip ? await q.query(
+    `select mp.label, mp.bottom_depth_m, pr.run_at, pr.valid_at, pr.is_forecast, pr.profile, pr.surface_temp_c, pr.break_depth_m, pr.band_depth_m
+     from public.model_points mp join public.model_profiles pr on pr.model_point_id = mp.id
+     where mp.port_id = $1 and (pr.valid_at between $2 and $3 or pr.valid_at between $4 and $5 or pr.valid_at between $6 and $7)`,
+    [port.id, ...moments],
+  ) : { rows: [] };
   return buildConditions({
-    port, date, timeOfDay, now, thresholds, connected: true, buoysInRange: linked.rows[0].n, marine: zone.rows[0] ?? null,
+    port, date, timeOfDay, now, thresholds, connected: true, buoysInRange: linked.rows[0].n, marine: zone.rows[0] ?? null, waterPoint,
+    model: modelRows.rows.map((r) => ({ ...r, bottom_depth_m: Number(r.bottom_depth_m), surface_temp_c: n(r.surface_temp_c), break_depth_m: n(r.break_depth_m), band_depth_m: n(r.band_depth_m) })),
     observations: obs.rows.map((r) => ({ ...r, lat: Number(r.lat), lon: Number(r.lon), distance_mi: Number(r.distance_mi), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms), wave_height_m: n(r.wave_height_m), wave_period_s: n(r.wave_period_s), air_temp_c: n(r.air_temp_c), water_temp_c: n(r.water_temp_c) })),
     forecasts: fc.rows.map((r) => ({ ...r, precip_pct: n(r.precip_pct), air_temp_c: n(r.air_temp_c), sky_cover_pct: n(r.sky_cover_pct), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms) })),
   });

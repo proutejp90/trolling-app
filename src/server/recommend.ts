@@ -33,6 +33,8 @@ export const recommendInput = z.object({
     break_depth_ft: z.number().min(0).max(400).optional(),
     lure_depth_ft: z.number().min(0).max(400).optional(),
     lines: z.number().int().min(1).max(12).optional(),
+    /** The water the angler fishes: the near, mid or offshore sample point. */
+    water_point: z.enum(["near", "mid", "off"]).optional(),
   }).strict().default({}),
 }).strict();
 export type RecommendInput = z.input<typeof recommendInput>;
@@ -41,7 +43,7 @@ export type QuestionField = "clarity" | "sky" | "wind" | "mode" | "depth";
 
 /** One condition as the Quick questions screen shows it: the value in use, where it came from, and what the data said. */
 export interface Prefilled {
-  field: "time_window" | "sky" | "wind" | "clarity" | "mode" | "lines" | "depth";
+  field: "time_window" | "sky" | "wind" | "clarity" | "mode" | "lines" | "depth" | "water_point";
   value: string | number | null;
   source: DataSource | "Your answer" | "Your last answer" | null;
   /** What the data gave before any answer. Null when no source has this value. */
@@ -56,13 +58,13 @@ export interface Recommendation {
   engine: EngineResult;
   conditions: Conditions;
   /** 0 to 5: where the depth came from, after the angler's answers are counted. */
-  temp_source_level: number;
+  temp_source_level: number | "1m";
   /** Where each input came from, for the result screen. */
   /** Which day this is and what kind of data it has. */
   day: { is_today: boolean; kind: DayKind; time_window: TimeOfDay | null; days_to_trip: number; updated_at: string | null };
   /** Every condition in use, with its source. */
   prefilled: Prefilled[];
-  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "buoy" | "you" | null; depth: string; depth_kind: "buoy" | "break" | "lure" | "default" | null };
+  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "buoy" | "you" | null; depth: string; depth_kind: "buoy" | "model" | "break" | "lure" | "default" | null };
   /** The values the engine ran on, for the chips on the result screen. */
   inputs: { sky: "bright" | "overcast" | "low_light" | null; wind_calm: boolean | null; clarity: "clear" | "stained" | "murky" | "unknown" | null };
   /** What the catalog says about each finish in the spread, by finish id. */
@@ -103,18 +105,27 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   // The time is never asked: today is now, and any other day starts at first light until the angler picks a window.
   const window: TimeOfDay = input.time_window ?? input.time_of_day ?? "now";
   const conditions = deps.db && port.id
-    ? await loadConditions(deps.db, port, input.date, window, deps.now, ruleset.thresholds)
+    ? await loadConditions(deps.db, port, input.date, window, deps.now, ruleset.thresholds, a.water_point)
     : buildConditions({ port, date: input.date, timeOfDay: window, now: deps.now, observations: [], forecasts: [], thresholds: ruleset.thresholds, connected: false });
 
   // The angler's answer always wins: they are looking at the sky and the water.
   const sky = a.sky ?? conditions.sky ?? undefined;
   const windCalm = a.wind ? a.wind === "calm" : conditions.wind_calm ?? undefined;
+  // A break depth the angler gives beats the model and a surface reading, but not a buoy's measured profile.
   const useAnglerBreak = conditions.temp_source_level !== 1 && a.break_depth_ft !== undefined;
   const level = conditions.temp_source_level === 1 ? 1 : useAnglerBreak ? 4 : conditions.temp_source_level;
+  const modeled = level === "1m" ? conditions.model : null;
+  const modelPoint = conditions.model?.points.find((p) => p.label === conditions.model!.point) ?? null;
+  // In August the water fished settles offshore or staging, when the model gives its depth. Otherwise it is asked.
+  const stagingMaxFt = Number(ruleset.thresholds.find((t) => t.name === "staging_water_max_ft")?.value ?? 70);
+  const modeFromWater = month === 8 && !a.mode && modelPoint ? (modelPoint.water_depth_ft <= stagingMaxFt ? "staging" as const : "offshore" as const) : undefined;
 
   const context: EngineContext = {
     date: input.date, shore: port.shore, temp_source_level: level as EngineContext["temp_source_level"],
-    ...(conditions.temp_profile ? { temp_profile: conditions.temp_profile } : {}),
+    ...(conditions.temp_profile && !useAnglerBreak ? { temp_profile: conditions.temp_profile } : {}),
+    ...(modeled && modelPoint ? { profile_resolution_ft: modelPoint.layer_ft } : {}),
+    // The model shows an upwelling directly. The wind rule is the fallback when it has nothing to compare.
+    ...(modeled && modeled.upwelling !== null ? { upwelling_likely: modeled.upwelling } : {}),
     ...(useAnglerBreak ? { break_depth_ft: a.break_depth_ft } : {}),
     ...(a.lure_depth_ft !== undefined ? { lure_depth_ft: a.lure_depth_ft } : {}),
     ...(conditions.wind_history.length ? { wind_history: conditions.wind_history } : {}),
@@ -122,7 +133,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     ...(a.clarity ? { clarity: a.clarity } : {}),
     ...(conditions.light_period ? { light_period: conditions.light_period } : {}),
     ...(conditions.hours_after_sunrise !== null ? { hours_after_sunrise: conditions.hours_after_sunrise } : {}),
-    ...(a.mode && month === 8 ? { mode: a.mode } : {}),
+    ...(a.mode && month === 8 ? { mode: a.mode } : modeFromWater ? { mode: modeFromWater } : {}),
     ...(a.lines ? { lines_available: a.lines } : {}),
   };
   const engine = evaluate(context, ruleset.rules, ruleset.thresholds, ruleset.catalog);
@@ -138,7 +149,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     // Asked only when no source supplied them.
     if (!sky) questions.push("sky");
     if (windCalm === undefined) questions.push("wind");
-    if (month === 8 && !a.mode) questions.push("mode");
+    if (month === 8 && !a.mode && !modeFromWater) questions.push("mode");
     if (engine.status === "needs_input") questions.push("depth");
   }
   const status = engine.status === "out_of_season" ? "out_of_season" : questions.length ? "needs_input" : "ok";
@@ -148,7 +159,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   const threshold = (name: string, fallback: number) => Number(ruleset.thresholds.find((t) => t.name === name)?.value ?? fallback);
   const freshHours = threshold("obs_fresh_hours", 3), staleHours = threshold("obs_stale_hours", 6);
   // A lure depth the angler typed is their answer, level 4 on the ladder, whatever the buoys say.
-  const confidenceLevel = engine.depth_source === "angler" ? 4 : (level as 1 | 2 | 4 | 5);
+  const confidenceLevel = engine.depth_source === "angler" ? 4 : (level as 1 | "1m" | 2 | 4 | 5);
   // Reports arrive in Phase 4 and the angler's log in Phase 5b, so nothing raises or lowers a step for agreement yet.
   const confidence = confidenceFor({ level: confidenceLevel, ageHours, freshHours, staleHours, dayKind: conditions.day_kind, evidence: null });
   const old = ageHours !== null && ageHours > freshHours ? `, read ${Math.round(ageHours)} hours ago` : "";
@@ -156,6 +167,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     engine.depth_source === "angler" ? "Depth is the lure depth you gave, not a measurement."
     : level === 4 ? `Depth comes from the break depth you gave. ${conditions.messages[0] ?? ""}`.trim()
     : level === 5 ? conditions.messages[0] ?? "Results use month defaults."
+    : level === "1m" ? (conditions.model!.is_forecast ? "Depth comes from NOAA's lake model forecast for this time. It is modeled, not measured." : `Depth comes from NOAA's lake model, run ${Math.round(conditions.model!.age_hours)} hours ago. It is modeled, not measured.`)
     : level === 1 ? `Depth comes from a buoy's temperature profile${old}.${confidence === "high" ? "" : " No recent fishing report to check it against."}`
     : `A buoy gives the surface temperature only${old}. No recent fishing report to check it against.`;
 
@@ -164,7 +176,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
   const dataWind = conditions.wind_calm === null ? null : conditions.wind_calm ? "calm" : "breezy";
   const remembered = (f: "clarity" | "lines") => (input.remembered?.includes(f) ? "Your last answer" as const : "Your answer" as const);
   const answered = <T,>(answer: T | undefined, data: T | null, dataSource: DataSource | null) => (answer !== undefined && answer !== data ? "Your answer" as const : dataSource);
-  const depthKind = engine.depth_source === "angler" ? "lure" : engine.depth_source === "R05" ? (level === 1 ? "buoy" : "break") : engine.depth_source ? "default" : null;
+  const depthKind = engine.depth_source === "angler" ? "lure" : engine.depth_source === "R05" ? (level === 1 ? "buoy" : level === "1m" ? "model" : "break") : engine.depth_source ? "default" : null;
   const defaultLines = threshold("lines_default", 4);
   const prefilled: Prefilled[] = [
     { field: "time_window", value: conditions.time_window, source: input.time_window && input.time_window !== "now" ? "Your answer" : "Default", data_value: conditions.is_today ? "now" : "first_light", data_source: "Default" },
@@ -173,7 +185,9 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     { field: "clarity", value: a.clarity ?? null, source: a.clarity ? remembered("clarity") : null, data_value: null, data_source: null },
     ...(engine.mode ? [{ field: "mode" as const, value: engine.mode, source: a.mode && month === 8 ? "Your answer" as const : "Default" as const, data_value: month === 8 ? null : engine.mode, data_source: month === 8 ? null : "Default" as const }] : []),
     { field: "lines", value: a.lines ?? defaultLines, source: a.lines && a.lines !== defaultLines ? remembered("lines") : "Default", data_value: defaultLines, data_source: "Default" },
-    { field: "depth", value: engine.depth_ft ? `${engine.depth_ft.min} to ${engine.depth_ft.max} ft down` : null, source: depthKind === "buoy" ? "Measured" : depthKind === "default" ? "Default" : depthKind ? "Your answer" : null, data_value: null, data_source: null },
+    { field: "depth", value: engine.depth_ft ? `${engine.depth_ft.min} to ${engine.depth_ft.max} ft down` : null, source: depthKind === "buoy" ? "Measured" : depthKind === "model" ? "Modeled" : depthKind === "default" ? "Default" : depthKind ? "Your answer" : null, data_value: null, data_source: null },
+    // The water fished: one of the model's three sample points. Shown only when the model has them.
+    ...(conditions.model ? [{ field: "water_point" as const, value: conditions.model.point, source: a.water_point && a.water_point !== "mid" ? "Your answer" as const : "Default" as const, data_value: "mid", data_source: "Default" as const }] : []),
   ];
   const overrides = prefilled.filter((p) => p.source === "Your answer" && p.data_value !== null && p.data_value !== p.value)
     .map((p) => ({ field: p.field, answer: p.value, replaced: p.data_value, replaced_source: p.data_source }));
@@ -184,7 +198,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     const { rows } = await deps.db.query(
       `insert into public.recommendations (port_id, requested_for, cache_key, context, engine_output, temp_source_level, confidence, used_fallback)
        values ($1, $2, $3, $4, $5, $6, $7, true) returning id`,
-      [port.id, input.date, cacheKey(input, deps.now), JSON.stringify({ input, context, overrides, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), level, confidence],
+      [port.id, input.date, cacheKey(input, deps.now), JSON.stringify({ input, context, overrides, conditions: { ...conditions, readings: undefined } }), JSON.stringify(engine), String(level), confidence],
     );
     recommendation_id = rows[0].id;
   }
@@ -197,7 +211,7 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
       sky: a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
       wind: a.wind ? "you" : conditions.wind_source === "Measured" ? "buoy" : conditions.wind_calm !== null ? "forecast" : null,
       depth_kind: depthKind,
-      depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
+      depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : level === "1m" ? "NOAA's lake model" : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
     },
     inputs: { sky: sky ?? null, wind_calm: windCalm ?? null, clarity: a.clarity ?? null },
     traits: Object.fromEntries(engine.setups.map((x) => {

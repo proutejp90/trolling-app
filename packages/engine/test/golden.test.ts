@@ -92,6 +92,25 @@ describe("golden scenarios: rules R01 to R19", () => {
     expect(r.finish_ranking.plug!.some((f) => f.name === "Fluorescent red")).toBe(true);
   });
 
+  it("G24: May 10, Ludington, buoys out, a modeled profile with the break at 35 to 45 ft", () => {
+    // The model resolves about 10 ft per layer here, so the break is a range and the depth range is that much wider.
+    const r = run({ date: "2026-05-10", temp_source_level: "1m", temp_profile: profileWithBreakAt(40), profile_resolution_ft: 10, clarity: "clear", sky: "bright", ...PLUG_ONLY });
+    expect(codes(r)).toEqual(expect.arrayContaining(["R01", "R05"]));
+    expect(r.depth_source).toBe("R05");
+    expect(r.depth_ft).toEqual({ min: 35, max: 65 });
+    // The same profile from a buoy is stated to the foot.
+    expect(run({ date: "2026-05-10", temp_source_level: 1, temp_profile: profileWithBreakAt(40), clarity: "clear", sky: "bright", ...PLUG_ONLY }).depth_ft).toEqual({ min: 40, max: 60 });
+    // A modeled break near the surface never starts above it.
+    expect(run({ date: "2026-05-10", temp_source_level: "1m", temp_profile: profileWithBreakAt(3), profile_resolution_ft: 10, ...PLUG_ONLY }).depth_ft!.min).toBe(0);
+  });
+
+  it("a modeled profile already shows an upwelling, so the wind rule does not shift it again", () => {
+    const base = { date: "2026-08-15", temp_profile: profileWithBreakAt(60), profile_resolution_ft: 10, wind_history: windFrom(45, 30), ...PLUG_ONLY } as const;
+    const modeled = run({ ...base, temp_source_level: "1m" });
+    expect(modeled.depth_ft).toEqual({ min: 55, max: 85 });
+    expect(modeled.fired.find((f) => f.code === "R08")?.note).toMatch(/modeled profile/);
+  });
+
   it("G8: Aug, east-shore port, 30 hours of northeast wind", () => {
     const base = { date: "2026-08-15", clarity: "clear" as const, sky: "bright" as const, ...PLUG_ONLY };
     const calm = run(base);

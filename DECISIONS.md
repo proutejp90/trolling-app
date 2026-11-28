@@ -323,6 +323,24 @@ These wait for the day-selection and prefilled-conditions work: the time windows
 ### Not built in this part
 Using the profiles: level 1m in the fallback ladder, forecast profiles for future days, the modeled label, the depth chart and sample-point tabs, model checks against buoys, and forecast waves. The tables for all of them exist.
 
+## Phase 2b, part two: using the lake model
+
+- **Where the model sits.** Today: a buoy temperature profile within range wins (level 1); with none, a model run under `model_max_age_h` (12) old is used (level "1m"), ahead of a buoy's surface reading. Tomorrow through the forecast horizon: the model's forecast for the trip's time. Beyond the horizon and in the past: month defaults. A break depth the angler types still beats the model, as any answer of theirs does.
+- **The engine learned two things.** The source level "1m", and `profile_resolution_ft`: with a modeled profile the depth range starts half a model layer above where the profile enters the temperature band and ends half a layer below, plus the usual 20 ft. So a modeled break is never stated more finely than the model resolves it (golden scenario G24: break 35 to 45 ft gives 35 to 65 ft).
+- **Break as a range.** One layer is the water depth at the point divided by 20: about 3 ft over 60 ft of water and 10 ft over 200 ft. The break is shown as that range, clipped to the surface and the bottom.
+- **Upwelling from the model.** When the near-shore point has a profile for the trip time and for 24 hours earlier, an upwelling is read from them: the surface at least `model_upwelling_drop_f` (2 °F, owner estimate) colder and the cold layer at least one model layer shallower. That replaces the wind rule's verdict for that trip. With nothing to compare, the wind rule decides as before. Either way a modeled profile is not shifted again by R08, since it already shows the cold water.
+- **Water fished.** The near, mid and offshore sample points are the choices, mid by default, each named with its real water depth. In August the choice settles offshore or staging (staging at `staging_water_max_ft`, 70 ft, or less), so "Where are you fishing" is asked only when there is no model.
+- **Labels.** A modeled depth reads "modeled" in the confidence reason, the depth and water chips, the data-age chip ("Model run 3 h old", or "Model forecast"), the Conditions in use screen and the chart. No buoy is named as the source of a modeled number.
+- **The agent** is told when the depth is modeled or forecast, and its confidence reason is rejected if it says neither. The spec asks for this in the conditions summary; since the UI review the data source is said once, in the confidence reason, so the rule is applied there. Prompt version `2026-11-28.3`. **The evals have not been run on it.**
+- **Confidence** from the model alone is medium, and capped at medium for any forecast day. Raising it to high needs a probe reading that agrees (Phase 5); a buoy profile that exists is simply used instead.
+- **Model checks** are written by the conditions refresh, not by requests: wherever a buoy profile from the last three hours sits within `model_check_max_miles` (5) of a sample point, the measured and modeled break depths are stored, once per point and reading. The admin view of the running error is Phase 6.
+- **The stored source level is text** (`recommendations.temp_source_level`), so it can hold "1m".
+- **The chart** is one line of temperature against depth, depth running down, with the break as a shaded band and its range written on it. The same numbers are available as a table. It is drawn for the model only; a buoy's profile still shows as a table on its station row.
+
+### Not built here
+- **Forecast waves.** NWS grid data has them offshore (see the forecast panel notes); wiring that to the sample points is the next piece.
+- **Today's break beside the forecast break** is shown as text, not as a second line on the chart.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).
