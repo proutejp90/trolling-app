@@ -40,7 +40,11 @@ export interface Recommendation {
   /** 0 to 5: where the depth came from, after the angler's answers are counted. */
   temp_source_level: number;
   /** Where each input came from, for the result screen. */
-  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "you" | null; depth: string };
+  sources: { sky: "forecast" | "you" | "time of day" | null; wind: "forecast" | "you" | null; depth: string; depth_kind: "buoy" | "break" | "lure" | "default" | null };
+  /** The values the engine ran on, for the chips on the result screen. */
+  inputs: { sky: "bright" | "overcast" | "low_light" | null; wind_calm: boolean | null; clarity: "clear" | "stained" | "murky" | "unknown" | null };
+  /** What the catalog says about each finish in the spread, by finish id. */
+  traits: Record<string, { glow: boolean; uv: boolean; house_brand: boolean }>;
   confidence: "low" | "medium" | "high";
   confidence_reason: string;
   ruleset_source: Ruleset["source"];
@@ -144,8 +148,14 @@ export async function recommend(raw: RecommendInput, deps: { db: Queryable | nul
     sources: {
       sky: dark ? "time of day" : a.sky ? "you" : conditions.sky === "low_light" ? "time of day" : conditions.sky ? "forecast" : null,
       wind: a.wind ? "you" : conditions.wind_calm !== null ? "forecast" : null,
+      depth_kind: engine.depth_source === "angler" ? "lure" : engine.depth_source === "R05" ? (level === 1 ? "buoy" : "break") : engine.depth_source ? "default" : null,
       depth: engine.depth_source === "angler" ? "the lure depth you gave" : engine.depth_source === "R05" ? (level === 1 ? `the ${conditions.temp_station?.name} temperature profile` : "the break depth you gave") : engine.depth_source ? "month defaults" : "nothing yet",
     },
+    inputs: { sky: sky ?? null, wind_calm: windCalm ?? null, clarity: a.clarity ?? null },
+    traits: Object.fromEntries(engine.setups.map((x) => {
+      const lure = ruleset.catalog.lures.find((l) => l.id === x.lure_id), finish = lure?.finishes.find((f) => f.id === x.finish_id);
+      return [x.finish_id, { glow: Boolean(finish?.finish_types.includes("glow")), uv: Boolean(finish?.finish_types.includes("uv")), house_brand: Boolean(lure?.is_house_brand) }];
+    })),
     confidence, confidence_reason, ruleset_source: ruleset.source, recommendation_id,
     explanation: templateExplanation(engine, conditions, confidence_reason),
     agent_available: status === "ok" && engine.setups.length > 0 && agentConfigured(),

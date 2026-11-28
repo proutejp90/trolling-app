@@ -18,3 +18,8 @@ export function windHistoryLine(w: Wind48h, daysToTrip: number): string {
   const line = `${w.station}: ${w.north_east_hours} of ${w.hours} hours from the north or east.`;
   return w.used ? line : `${line} Not used for this trip: it is ${count(daysToTrip, "day")} away.`;
 }
+
+const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+export const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8]!;
+/** "July 15" from an ISO date. */
+export const monthName = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });

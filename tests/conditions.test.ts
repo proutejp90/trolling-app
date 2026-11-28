@@ -14,6 +14,9 @@ const profile = [{ depth_m: 0, temp_c: 20 }, { depth_m: 6, temp_c: 18 }, { depth
 const build = (observations: ObservationRow[], extra: Partial<Parameters<typeof buildConditions>[0]> = {}) =>
   buildConditions({ port, date: "2026-07-15", timeOfDay: "day", now, observations, forecasts: [], thresholds, connected: true, ...extra });
 
+const windRows = (station: string, source: string, distance: number, hours: number, dir: number) =>
+  Array.from({ length: hours }, (_, i) => obs({ observed_at: hoursAgo(i + 0.5), wind_dir_deg: dir, wind_speed_ms: 5, station_name: station, source, distance_mi: distance }));
+
 describe("water temperature ladder", () => {
   it("level 1: a buoy within 25 miles with temperature at depth", () => {
     const c = build([obs({ observed_at: hoursAgo(1), water_temp_c: 20, temp_profile: profile, station_name: "Muskegon Buoy", source: "seagull" })]);
@@ -185,6 +188,19 @@ describe("the Conditions screen's station list", () => {
     expect(c.readings[1]).toMatchObject({ station: "Muskegon County Airport", sources: ["NWS"] });
   });
 
+  it("marks the stations the engine read, and carries the freshness limits", () => {
+    const c = build([
+      ...windRows("Muskegon CG Station", "ndbc", 0.1, 48, 20),
+      obs({ station_name: "Muskegon Buoy", source: "ndbc", distance_mi: 3.5, observed_at: hoursAgo(1), water_temp_c: 15 }),
+      obs({ station_name: "Airport", source: "nws", distance_mi: 6.5, observed_at: hoursAgo(1), air_temp_c: 12 }),
+    ]);
+    expect(c.readings.map((r) => [r.station, r.used_for])).toEqual([["Muskegon CG Station", ["wind"]], ["Muskegon Buoy", ["water"]], ["Airport", []]]);
+    expect(c.limits).toEqual({ fresh_hours: 3, stale_hours: 6, max_miles: 25 });
+    // A trip weeks away uses no station at all.
+    const far = build([...windRows("Muskegon CG Station", "ndbc", 0.1, 48, 20)], { date: "2026-08-20" });
+    expect(far.readings[0]!.used_for).toEqual([]);
+  });
+
   it("keeps stations apart when they are more than a tenth of a mile from each other, or have no position", () => {
     const apart = build([
       obs({ station_name: "A", source: "ndbc", distance_mi: 3.1, lat: 43.2, lon: -86.4, observed_at: hoursAgo(1), water_temp_c: 10 }),
@@ -216,9 +232,6 @@ describe("the Conditions screen's station list", () => {
     expect({ ...withPosition, readings: null }).toEqual({ ...without, readings: null });
   });
 });
-
-const windRows = (station: string, source: string, distance: number, hours: number, dir: number) =>
-  Array.from({ length: hours }, (_, i) => obs({ observed_at: hoursAgo(i + 0.5), wind_dir_deg: dir, wind_speed_ms: 5, station_name: station, source, distance_mi: distance }));
 
 describe("what the Conditions screen says about wind history", () => {
   it("counts the hours when a station covers the window", () => {

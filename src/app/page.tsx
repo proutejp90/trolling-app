@@ -1,3 +1,4 @@
+import { ConnectionBadge } from "@/components/connection-badge";
 import { Quiz } from "@/components/quiz/quiz";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { PortOption } from "@/lib/home";
@@ -22,12 +23,18 @@ async function portList(): Promise<PortOption[]> {
 // only the ones the cached buoy and forecast data could not answer.
 export default async function Home() {
   return (
-    <div className="on-water mx-auto flex min-h-screen max-w-md flex-col">
-      <header className="flex h-topbar items-center justify-between border-b border-border-subtle bg-surface-1 pl-4 pr-1">
-        <span className="text-t3">Conditions recommender</span>
-        <ThemeToggle />
+    <div className="on-water flex min-h-screen flex-col">
+      {/* The bar runs the full width of the window; its contents stay on the content column. */}
+      <header className="border-b border-border-subtle bg-surface-1">
+        <div className="mx-auto flex h-topbar max-w-md items-center justify-between gap-3 pl-4 pr-1">
+          <span className="text-t3">Conditions recommender</span>
+          <span className="flex items-center gap-1">
+            <ConnectionBadge />
+            <ThemeToggle />
+          </span>
+        </div>
       </header>
-      <main className="flex flex-1 flex-col p-4">
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col p-4">
         <Quiz ports={await portList()} />
       </main>
     </div>

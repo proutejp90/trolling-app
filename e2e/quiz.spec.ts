@@ -54,14 +54,18 @@ test.describe("recommendation flow", () => {
     await page.getByLabel("Break depth, in feet").fill("60");
     await page.getByRole("button", { name: "Show setup" }).click();
     await expect(page.getByText("Low confidence")).toBeVisible();
-    await expect(page.getByText(reading)).toBeVisible();
+    // The plan card's chips say what the setup is based on and how old the reading is.
+    await expect(page.getByText("Water 60.3 °F · buoy")).toBeVisible();
+    await expect(page.getByText("Buoy 20 min old")).toBeVisible();
+    await expect(page.getByText("Depth · your break")).toBeVisible();
     await expect(page.getByText("Depth comes from the break depth you gave.").first()).toBeVisible();
     await expect(page.getByText("60 to 80 ft down").first()).toBeVisible();
 
     await page.getByRole("button", { name: "View conditions" }).click();
     await expect(page.getByRole("heading", { name: "Conditions at Muskegon" })).toBeVisible();
     await expect(page.getByText("Muskegon Buoy, MI", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Water 60\.3 °F\. Wind [\d.]+ mph from the \w+/)).toBeVisible();
+    await expect(page.getByText(/Water 60\.3 °F · (Waves [\d.]+ ft · )?Wind [\d.]+ mph from the \w+/)).toBeVisible();
+    await expect(page.getByText("Used for water")).toBeVisible();
     await expect(page.getByText(/of \d+ hours from the north or east\./)).toBeVisible();
     await expect(page.getByText("No forecast covers that time.").first()).toBeVisible();
   });
@@ -125,7 +129,8 @@ test.describe("recommendation flow", () => {
   for (const date of ["2026-04-01", "2026-07-15"]) {
     test(`${date}: every question is there on the first render and picking a time moves nothing`, async ({ page }) => {
       await start(page, date);
-      for (const legend of ["Time on the water", "Water clarity", "Sky", "Wind", "Depth"]) await expect(page.getByRole("group", { name: legend, exact: true })).toBeVisible();
+      for (const legend of ["Time on the water", "Water clarity", "Sky", "Wind", "What you know"]) await expect(page.getByRole("group", { name: legend, exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Depth", exact: true })).toBeVisible();
       await expect(page.getByRole("group", { name: "Lines" })).toBeVisible();
       // Where things sit on the page, not in the window, so scrolling does not count as moving.
       const place = async (text: string) => {
@@ -230,15 +235,11 @@ test.describe("recommendation screen", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Muskegon, April 1");
     await page.getByRole("button", { name: "View conditions" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Conditions at Muskegon");
-    await expect(page.getByRole("heading", { level: 3 })).toHaveCount(0); // sections sit one level under the main heading
+    // Zone labels are real headings one level under it.
+    await expect(page.getByRole("heading", { level: 2 })).toHaveText(["Water", "Wind", "Forecast"]);
   });
 
   test("on a wide screen the button follows the last field; on a phone it sits at the bottom", async ({ page }) => {
-    const gap = async (button: string, above: string) => {
-      const b = (await page.getByRole("button", { name: button }).boundingBox())!;
-      const a = (await page.getByText(above, { exact: true }).last().boundingBox())!;
-      return b.y - (a.y + a.height);
-    };
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
     await page.goto("/");
@@ -248,7 +249,9 @@ test.describe("recommendation screen", () => {
     await dateFieldOf(page).fill("2026-07-15");
     await page.getByRole("button", { name: "Get setup" }).click();
     await expect(page.getByRole("button", { name: "Show setup" })).toBeVisible();
-    expect(await gap("Show setup", "Lines")).toBeLessThan(60);
+    const cards = page.locator("form > section");
+    const lastCard = (await cards.last().boundingBox())!;
+    expect((await page.getByRole("button", { name: "Show setup" }).boundingBox())!.y - (lastCard.y + lastCard.height)).toBeLessThan(60);
     await page.setViewportSize({ width: 390, height: 1400 });
     await page.getByRole("button", { name: "Back" }).click();
     expect((await page.getByRole("button", { name: "Get setup" }).boundingBox())!.y - (await dateBottom())).toBeGreaterThan(200);
@@ -269,22 +272,28 @@ test.describe("conditions screen", () => {
   const miles = async (rows: import("@playwright/test").Locator) =>
     (await rows.allTextContents()).map((t) => Number(/([\d.]+) mi/.exec(t)![1]));
 
-  test("lists the stations in range openly and the rest behind a closed row", async ({ page }) => {
+  test("lists the stations in range by what they measure, and the rest behind a closed row", async ({ page }) => {
     await conditions(page, "2026-10-14");
-    const stations = page.locator("section", { has: page.getByRole("heading", { name: "Stations" }) });
-    const open = stations.locator(":scope > ul > li"), farther = stations.locator("details");
-    const near = await miles(open);
-    expect(near.length).toBeGreaterThan(0);
-    for (const d of near) expect(d).toBeLessThanOrEqual(25);
-    expect(new Set(near).size).toBe(near.length); // no place is listed twice
-    await expect(farther.locator("summary")).toHaveText("Farther stations, not used");
+    const zone = (label: string) => page.locator("section", { has: page.getByRole("heading", { name: label, exact: true, level: 2 }) });
+    const water = await miles(zone("Water").locator("li")), wind = await miles(zone("Wind").locator("li"));
+    expect(water.length).toBeGreaterThan(0);
+    expect(wind.length).toBeGreaterThan(0);
+    for (const d of [...water, ...wind]) expect(d).toBeLessThanOrEqual(25);
+    expect(new Set(water).size).toBe(water.length); // no place is listed twice
+    // Water rows report water or waves; wind-only stations sit under Wind.
+    for (const row of await zone("Water").locator("li").allTextContents()) expect(row).toMatch(/Water|Waves/);
+    for (const row of await zone("Wind").locator("li").allTextContents()) { expect(row).toMatch(/Wind/); expect(row).not.toMatch(/Water|Waves/); }
+    // Each row names where its numbers came from; the stations the engine read say so.
+    await expect(zone("Water").locator("li").first()).toContainText(/NDBC|GLOS|NWS/);
+    await expect(zone("Wind").getByText("Used for wind")).toHaveCount(1);
+    const farther = page.locator("details", { hasText: "Farther stations, not used" });
     expect(await farther.evaluate((d) => (d as HTMLDetailsElement).open)).toBe(false);
     await farther.locator("summary").click();
     const far = await miles(farther.locator("li"));
     expect(far.length).toBeGreaterThan(0);
     for (const d of far) expect(d).toBeGreaterThan(25);
-    // Each row names where its numbers came from.
-    await expect(open.first()).toContainText(/NDBC|GLOS|NWS/);
+    await expect(farther.getByText("Not used", { exact: true }).first()).toBeVisible();
+    await expect(farther.getByText(/Used for/)).toHaveCount(0);
   });
 
   test("the wind line counts the hours, and says when the trip is too far off to use them", async ({ page }) => {
@@ -295,6 +304,119 @@ test.describe("conditions screen", () => {
     await page.getByRole("button", { name: "Back" }).click();
     await conditions(page, "2026-07-15");
     await expect(page.getByText(/hours from the north or east\. Not used for this trip: it is \d+ days away\.$/)).toBeVisible();
+  });
+});
+
+test.describe("zones, chips and indicators", () => {
+  async function toResult(page: Page, date: string, where?: string) {
+    await start(page, date);
+    await answer(page, { where });
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+  }
+
+  test("the top bar shows Offline only while the device is offline", async ({ page, context }) => {
+    await page.goto("/");
+    await expect(page.getByText("Offline", { exact: true })).toHaveCount(0);
+    await context.setOffline(true);
+    await expect(page.getByRole("banner").getByText("Offline", { exact: true })).toBeVisible();
+    await expect(page.getByRole("banner").locator("svg").first()).toBeVisible(); // the word comes with its icon
+    await context.setOffline(false);
+    await expect(page.getByText("Offline", { exact: true })).toHaveCount(0);
+  });
+
+  test("the top bar spans the window while its contents stay on the content column", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const bar = (await page.getByRole("banner").boundingBox())!;
+    expect(bar.width).toBe(1440);
+    const name = (await page.getByRole("banner").getByText("Conditions recommender").boundingBox())!;
+    const heading = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
+    expect(name.x).toBe(heading.x);
+  });
+
+  test("question cards say what is left, and the progress bar counts the groups done", async ({ page }) => {
+    await start(page, "2026-07-15");
+    const card = (title: string) => page.locator("section", { has: page.getByRole("heading", { name: title, exact: true, level: 2 }) });
+    await expect(card("Your trip")).toContainText("1 left");
+    await expect(card("On the water")).toContainText("3 left");
+    await expect(card("Depth")).toContainText("Done");
+    await expect(card("Depth").getByText("Optional")).toBeVisible();
+    await expect(page.getByText("1 of 3 done")).toBeVisible();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+    await page.getByText("Daytime", { exact: true }).click();
+    await expect(card("Your trip")).toContainText("Done");
+    await expect(page.getByText("2 of 3 done")).toBeVisible();
+    // A chosen option carries a check as well as the dot and the fill.
+    await expect(page.locator("label", { hasText: "Daytime" }).locator("svg")).toHaveCount(1);
+    await expect(page.locator("label", { hasText: "Before sunrise" }).locator("svg")).toHaveCount(0);
+    const button = async () => (await page.getByRole("button", { name: "Show setup" }).boundingBox())!.y + (await page.evaluate(() => window.scrollY));
+    const before = await button();
+    await page.getByText("Clear", { exact: true }).click();
+    await page.getByText("Bright", { exact: true }).click();
+    await page.getByText("Breezy or more", { exact: true }).click();
+    await expect(card("On the water")).toContainText("Done");
+    await expect(page.getByRole("button", { name: "Show setup" })).toBeEnabled();
+    // Finishing hides the progress bar without moving the button.
+    await expect(page.getByText("3 of 3 done")).toBeHidden();
+    expect(await button()).toBe(before);
+    // A depth choice with no number is one more thing to answer.
+    await page.getByText("I know the break", { exact: true }).click();
+    await expect(card("Depth")).toContainText("1 left");
+  });
+
+  for (const date of ["2026-04-01", "2026-07-15"]) {
+    test(`${date}: the result is zoned, and the plan card shows speed and confidence above the fold`, async ({ page }) => {
+      await toResult(page, date);
+      await expect(page.getByRole("heading", { level: 2 })).toHaveText(["Your spread · 4 lines", "If nothing bites", "Good to know"]);
+      for (const text of ["Run the whole spread at", "Low confidence", "No live water data"]) {
+        const box = (await page.getByText(text, { exact: true }).boundingBox())!;
+        expect(box.y + box.height, text).toBeLessThan(844);
+      }
+      // One chip per input the engine used, each with its source.
+      const chips = page.getByRole("list", { name: "What the setup is based on" }).getByRole("listitem");
+      await expect(chips).toHaveText(["Sky bright · you", "Wind breezy · you", "Clarity clear · you", "Depth · month default"]);
+      // Status badges carry an icon as well as the word.
+      for (const text of ["Low confidence", "No live water data"]) await expect(page.getByText(text, { exact: true }).locator("svg")).toHaveCount(1);
+      // Each card: its line count, and Top pick on the first row only.
+      const cards = page.locator("section", { has: page.getByText("Speed at the lure") }).filter({ has: page.locator("details") });
+      await expect(cards.first().getByText("Top pick")).toHaveCount(1);
+      await expect(cards.first().getByText(/^\d+ lines?$/)).toBeVisible();
+    });
+  }
+
+  test("glow finishes carry a Glow label, and depth and speed sit side by side", async ({ page }) => {
+    await toResult(page, "2026-08-15", "Offshore");
+    await expect(page.getByText("Glow", { exact: true }).first()).toBeVisible();
+    const depth = (await page.getByText("Depth", { exact: true }).first().boundingBox())!, speed = (await page.getByText("Speed at the lure").first().boundingBox())!;
+    expect(depth.y).toBe(speed.y);
+    expect(speed.x).toBeGreaterThan(depth.x);
+    // Reason text starts at one edge whatever the tags.
+    const edges = await page.locator("details[open] li > div > span:last-child").evaluateAll((all) => all.map((e) => Math.round(e.getBoundingClientRect().x)));
+    expect(edges.length).toBeGreaterThan(2);
+    expect(new Set(edges).size).toBe(1);
+  });
+
+  test("Writing reasons shows while the agent's words are on their way, then goes", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
+    // The test server has no model key, so say an agent is available and hold its answer.
+    await page.route("**/api/recommend", async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { ...(await res.json()), agent_available: true, recommendation_id: "00000000-0000-4000-8000-000000000000" } });
+    });
+    let release = () => {};
+    await page.route("**/api/explain", async (route) => { await new Promise<void>((r) => { release = r; }); await route.fulfill({ status: 500, json: {} }); });
+    await page.goto("/");
+    await page.getByLabel("Date").fill("2026-07-15");
+    await page.getByRole("button", { name: "Get setup" }).click();
+    await answer(page);
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Writing reasons…")).toBeVisible();
+    release();
+    // The fallback stays and no error shows.
+    await expect(page.getByText("Writing reasons…")).toHaveCount(0);
+    await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
   });
 });
 

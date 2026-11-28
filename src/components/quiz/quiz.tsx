@@ -1,17 +1,19 @@
 "use client";
 
-import { ArrowLeft, ChevronRight, LocateFixed, Minus, Plus } from "lucide-react";
+import { ArrowLeft, Check, LocateFixed, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { EngineResult, Setup, SetupLureType, Tag } from "@recommender/engine";
 import type { Conditions } from "@/server/conditions";
 import type { QuestionField, Recommendation } from "@/server/recommend";
-import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
+import type { Explanation } from "@/server/agent/schema";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
 import { Choice } from "@/components/ui/choice";
-import { ago, windHistoryLine } from "@/lib/format";
-import { checkDate, defaultDate, nearestFirst, nextSeasonStart, type PortOption } from "@/lib/home";
-import { caveatsToShow, depthSourceLine, FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
-import type { Explanation, Reason } from "@/server/agent/schema";
+import { groupStatus } from "@/lib/chips";
+import { ago, monthName } from "@/lib/format";
+import { checkDate, defaultDate, nearestFirst, type PortOption } from "@/lib/home";
+import { ConditionsView } from "./conditions-view";
+import { Result } from "./result";
 
 type Step = "home" | "questions" | "result" | "conditions";
 type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
@@ -19,89 +21,7 @@ type Clarity = "clear" | "stained" | "murky" | "unknown";
 type Sky = "bright" | "overcast" | "low_light";
 
 const QUESTION_NAME: Record<QuestionField, string> = { time_of_day: "Time on the water", clarity: "Water clarity", sky: "Sky", wind: "Wind", mode: "Where are you fishing", depth: "Depth" };
-const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
-const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8]!;
-
-const feet = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min} ft down` : `${r.min} to ${r.max} ft down`);
-const mph = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min.toFixed(1)} mph` : `${r.min.toFixed(1)} to ${r.max.toFixed(1)} mph`);
-const monthName = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
 const inputClass = "h-touch w-full rounded-sm border border-border bg-surface-2 px-3 text-body text-fg hover:border-border-strong";
-
-/**
- * One reason with its evidence tags. A tag is a button: tapping it opens one
- * fixed sentence about that kind of evidence under the reason, and tapping again closes it.
- */
-function ReasonRow({ tags, text }: { tags: Tag[]; text: string }) {
-  const [open, setOpen] = useState<Tag | null>(null);
-  const id = useId();
-  return (
-    <li>
-      <div className="flex items-start gap-3">
-        <span className="flex shrink-0 gap-1">
-          {tags.map((t) => (
-            <button
-              key={t} type="button" aria-expanded={open === t} aria-controls={id}
-              onClick={() => setOpen(open === t ? null : t)}
-              className="inline-flex h-touch items-center rounded-sm"
-            >
-              <Badge tone={EVIDENCE_TAGS[t].tone}>{EVIDENCE_TAGS[t].label}</Badge>
-            </button>
-          ))}
-        </span>
-        <span className="flex min-h-touch items-center text-fg-secondary">{text}</span>
-      </div>
-      <p id={id} className="text-small text-fg-tertiary">{open ? TAG_EXPLAINER[open] : null}</p>
-    </li>
-  );
-}
-
-function SetupCard({ type, setups, reasons, startOpen }: { type: SetupLureType; setups: Setup[]; reasons: Reason[]; startOpen: boolean }) {
-  const first = setups[0]!;
-  const [open, setOpen] = useState(startOpen);
-  return (
-    <section className="rounded-md border border-border-subtle bg-surface-2 p-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-t3">{TYPE_NAME[type]}</h2>
-        <span className="text-small text-fg-tertiary">{setups.length} {setups.length === 1 ? "line" : "lines"}{first.position === "deepest" ? ", deepest" : ""}</span>
-      </div>
-      <dl className="mt-3 flex flex-col gap-2">
-        <div>
-          <dt className="text-small text-fg-tertiary">Depth</dt>
-          <dd className="text-t1 tabular-nums">{feet(first.depth_ft)}</dd>
-        </div>
-        <div>
-          <dt className="text-small text-fg-tertiary">Speed at the lure</dt>
-          <dd className="text-t1 tabular-nums">{mph(first.speed_mph)}</dd>
-        </div>
-      </dl>
-      <ul className="mt-3 border-t border-border-subtle">
-        {setups.map((s) => (
-          <li key={s.rank} className="flex min-h-touch items-center gap-3 border-b border-border-subtle py-2">
-            <span className="w-4 shrink-0 text-small tabular-nums text-fg-tertiary">{s.rank}</span>
-            <span className="min-w-0">
-              <span className="block font-medium">{s.finish_name}</span>
-              <span className="block text-small text-fg-secondary">
-                {s.lure_name}
-                {s.attractor_name ? `, behind a ${s.attractor_finish_name?.toLowerCase()} ${s.attractor_name}` : ""}
-                {s.leader_in ? `, ${s.leader_in} inch leader` : ""}
-              </span>
-              {s.breaks_rule ? <span className="block text-small text-warning">Closest match. Breaks rule {s.breaks_rule}.</span> : null}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <details className="mt-3" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary className="flex min-h-touch cursor-pointer list-none items-center gap-2 rounded-sm text-fg [&::-webkit-details-marker]:hidden">
-          <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" className={`shrink-0 text-fg-tertiary transition-transform duration-150 ${open ? "rotate-90" : ""}`} />
-          Why this setup
-        </summary>
-        <ul className="flex flex-col pb-1">
-          {reasons.map((r) => <ReasonRow key={r.text} tags={r.tags} text={r.text} />)}
-        </ul>
-      </details>
-    </section>
-  );
-}
 
 function ConditionsSummary({ c }: { c: Conditions }) {
   if (!c.temp_station) return null;
@@ -110,185 +30,6 @@ function ConditionsSummary({ c }: { c: Conditions }) {
       {c.temp_station.name}, {c.temp_station.distance_mi} miles away, read {c.water_temp_surface_f} °F at the surface {ago(c.age_minutes ?? 0)}
       {c.temp_profile ? ", with temperature at depth" : ""}.
     </p>
-  );
-}
-
-function Result({ rec, explanation, portName, date, modeAnswered, onConditions, onTryDate }: { rec: Recommendation; explanation: Explanation; portName: string; date: string; modeAnswered: boolean; onConditions: () => void; onTryDate: (date: string) => void }) {
-  const result: EngineResult = rec.engine;
-  if (rec.status === "out_of_season") {
-    const opening = nextSeasonStart(date);
-    return (
-      <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-surface-2 p-4">
-        <h1 className="text-t3" tabIndex={-1} data-screen-heading>Out of season</h1>
-        <p className="text-fg-secondary">
-          {monthName(date)} is outside the season. The rules cover April through October. Go back to pick a date in that range, or see the setup for opening day.
-        </p>
-        <Button variant="primary" size="touch" onClick={() => onTryDate(opening)}>Show {monthName(opening)}</Button>
-      </div>
-    );
-  }
-  const groups: { type: SetupLureType; setups: Setup[] }[] = [];
-  for (const s of result.setups) {
-    const last = groups[groups.length - 1];
-    if (last && last.type === s.lure_type) last.setups.push(s); else groups.push({ type: s.lure_type, setups: [s] });
-  }
-  const confidence = CONFIDENCE[rec.confidence];
-  const c = rec.conditions;
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h1>
-        <p className="mt-1 text-fg-secondary">
-          {explanation.conditions_summary}
-          {/* Said only when the angler chose where to fish. In other months the summary already places the fish. */}
-          {modeAnswered ? (result.mode === "staging" ? " This setup is for staging fish." : " This setup is for offshore fish.") : ""}
-          {result.water_depth_ft ? ` Fish over ${result.water_depth_ft.min} to ${result.water_depth_ft.max} ft of water.` : ""}
-        </p>
-      </div>
-      <div className="flex flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3">
-        <div className="flex items-start gap-3">
-          <Badge tone={confidence.tone}>{confidence.label}</Badge>
-          <p className="text-fg-secondary">{explanation.confidence_reason}</p>
-        </div>
-        <ConditionsSummary c={c} />
-        <p className="text-fg-secondary">
-          {/* Where depth came from is said once: here only if the confidence reason above does not name it. */}
-          {depthSourceLine(explanation.confidence_reason, rec.sources.depth)}
-          {rec.sources.sky ? ` Sky comes from ${rec.sources.sky === "you" ? "your answer" : rec.sources.sky === "forecast" ? "the forecast" : "the time of day"}.` : ""}
-          {result.upwelling_likely ? ` ${c.wind_station ?? "Wind history"} shows a day or more of north or east wind.` : ""}
-        </p>
-        <button type="button" onClick={onConditions} className="inline-flex h-touch items-center self-start rounded-sm text-accent-text underline underline-offset-2">View conditions</button>
-      </div>
-      {result.spread_speed_mph ? (
-        <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
-          <p className="text-small text-fg-tertiary">Run the whole spread at</p>
-          <p className="text-t1 tabular-nums">{mph(result.spread_speed_mph)}</p>
-          <p className="text-small text-fg-tertiary">at the lure, on {result.setups.length} {result.setups.length === 1 ? "line" : "lines"}</p>
-        </div>
-      ) : null}
-      {groups.map((g, i) => <SetupCard key={g.type} type={g.type} setups={g.setups} startOpen={i === 0} reasons={explanation.groups.find((x) => x.lure_type === g.type)?.reasons ?? []} />)}
-      {explanation.report_notes.length ? (
-        <section>
-          <h2 className="text-t3">Recent reports</h2>
-          <ul className="mt-2 flex flex-col gap-3">
-            {explanation.report_notes.map((n) => (
-              <li key={n.text} className="flex items-start gap-3">
-                <Badge tone={n.agrees ? "success" : "warning"}>{n.agrees ? "Agrees" : "Conflicts"}</Badge>
-                <span className="text-fg-secondary">{n.text} <span className="text-fg-tertiary">Michigan DNR, {monthName(n.report_date)}.</span></span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {result.setups.length === 0 ? (
-        <div className="rounded-md border border-border-subtle bg-surface-2 p-4">
-          <h2 className="text-t3">No setup fits</h2>
-          <p className="mt-2 text-fg-secondary">Nothing in the catalog passes the rules for these conditions.</p>
-        </div>
-      ) : null}
-      {result.dropped_types.length || result.dropped_lures.length || result.notes.length ? (
-        <section>
-          <h2 className="text-t3">Left out</h2>
-          <ul className="mt-2 flex list-disc flex-col gap-2 pl-5 text-fg-secondary">
-            {result.dropped_types.map((d) => <li key={d.lure_type}>{d.reason}</li>)}
-            {result.dropped_lures.map((d) => <li key={d.lure_id}>{d.name}: {d.reason}</li>)}
-            {result.notes.map((n) => <li key={n}>{n}</li>)}
-          </ul>
-        </section>
-      ) : null}
-      {result.tips.length ? (
-        <section>
-          <h2 className="text-t3">If nothing bites</h2>
-          <ul className="mt-2 flex flex-col">
-            {result.tips.map((tip) => <ReasonRow key={tip.rule_code} tags={["lore"]} text={tip.text} />)}
-          </ul>
-        </section>
-      ) : null}
-      <section className="text-small text-fg-tertiary">
-        {caveatsToShow(explanation.caveats, rec.sources.depth).map((c) => <p key={c} className="mb-1">{c}</p>)}
-        <ul className="mt-2 flex list-disc flex-col gap-1 pl-5">{KNOWN_LIMITS.map((l) => <li key={l}>{l}</li>)}</ul>
-      </section>
-    </div>
-  );
-}
-
-function StationRow({ r }: { r: Conditions["readings"][number] }) {
-  return (
-    <li className="border-b border-border-subtle py-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="font-medium">{r.station}</span>
-        <span className="shrink-0 text-small text-fg-tertiary">{r.distance_mi} mi</span>
-      </div>
-      <p className="text-small text-fg-tertiary">{ago(r.age_minutes)}{r.age_minutes > 360 ? ", more than 6 hours old" : ""} · {r.sources.join(", ")}</p>
-      <p className="mt-1 text-fg-secondary tabular-nums">
-        {[
-          r.water_temp_f !== null ? `Water ${r.water_temp_f} °F` : null,
-          r.wind_speed_mph !== null ? `Wind ${r.wind_speed_mph} mph${r.wind_dir_deg !== null ? ` from the ${compass(r.wind_dir_deg)}` : ""}` : null,
-          r.wave_height_ft !== null ? `Waves ${r.wave_height_ft} ft` : null,
-          r.air_temp_f !== null ? `Air ${r.air_temp_f} °F` : null,
-        ].filter(Boolean).join(". ") || "No readings the app uses."}
-      </p>
-      {r.temp_profile && r.temp_profile.length >= 3 ? (
-        <table className="mt-2 w-full text-small tabular-nums text-fg-secondary">
-          <caption className="pb-1 text-left text-fg-tertiary">Temperature at depth</caption>
-          <tbody>
-            {r.temp_profile.map((p) => (
-              <tr key={p.depth_ft} className="border-t border-border-subtle">
-                <th scope="row" className="py-1 text-left font-normal">{p.depth_ft} ft</th>
-                <td className="py-1 text-right">{p.temp_f} °F</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
-    </li>
-  );
-}
-
-/** The raw inputs: what each station last reported and how old it is. */
-function ConditionsView({ c }: { c: Conditions }) {
-  const near = c.readings.filter((r) => r.in_range), far = c.readings.filter((r) => !r.in_range);
-  return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-t2" tabIndex={-1} data-screen-heading>Conditions at {c.port.name}</h1>
-      {c.messages.length ? (
-        <ul className="flex list-disc flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3 pl-8 text-fg-secondary">
-          {c.messages.map((m) => <li key={m}>{m}</li>)}
-        </ul>
-      ) : null}
-      <section>
-        <h2 className="text-t3">Stations</h2>
-        {c.readings.length === 0 ? <p className="mt-2 text-fg-secondary">No station linked to this port has reported in the last three days.</p> : (
-          <>
-            {near.length ? <ul className="mt-2 border-t border-border-subtle">{near.map((r) => <StationRow key={`${r.source}/${r.station}`} r={r} />)}</ul> : <p className="mt-2 text-fg-secondary">No station within range has reported in the last three days.</p>}
-            {far.length ? (
-              <details>
-                <summary className="flex min-h-touch cursor-pointer list-none items-center gap-2 rounded-sm text-fg [&::-webkit-details-marker]:hidden">
-                  <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" className="chevron shrink-0 text-fg-tertiary transition-transform duration-150" />
-                  Farther stations, not used
-                </summary>
-                <ul className="border-t border-border-subtle">{far.map((r) => <StationRow key={`${r.source}/${r.station}`} r={r} />)}</ul>
-              </details>
-            ) : null}
-          </>
-        )}
-      </section>
-      <section>
-        <h2 className="text-t3">Wind, last 48 hours</h2>
-        <p className="mt-2 text-fg-secondary">
-          {windHistoryLine(c.wind_48h, c.days_to_trip)}
-        </p>
-      </section>
-      <section>
-        <h2 className="text-t3">Forecast for the trip</h2>
-        <p className="mt-2 text-fg-secondary tabular-nums">
-          {c.forecast
-            ? [c.forecast.sky_cover_pct !== null ? `Sky cover ${c.forecast.sky_cover_pct}%` : null, c.forecast.wind_speed_mph !== null ? `Wind ${c.forecast.wind_speed_mph} mph${c.forecast.wind_dir_deg !== null ? ` from the ${compass(c.forecast.wind_dir_deg)}` : ""}` : null, c.forecast.hazards.length ? `Marine hazard in effect: ${c.forecast.hazards.map((h) => `${h.phenomenon}.${h.significance}`).join(", ")}` : null].filter(Boolean).join(". ")
-            : "No forecast covers that time."}
-        </p>
-      </section>
-      <p className="text-small text-fg-tertiary">Buoy data from NOAA NDBC and GLOS. Forecast from the National Weather Service. This app gives no navigation or safety guidance.</p>
-    </div>
   );
 }
 
@@ -320,6 +61,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentExplanation, setAgentExplanation] = useState<{ for: string; explanation: Explanation } | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const latest = useRef(0);
   // Questions added after the form first rendered: they fade in and are announced, so a shift is never silent.
   const askedNow = useRef<QuestionField[]>([]);
@@ -418,6 +160,7 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
   useEffect(() => {
     if (step !== "result" || !rec || !rec.agent_available || !recKey || agentExplanation?.for === recKey) return;
     const controller = new AbortController();
+    setExplaining(true);
     fetch("/api/explain", {
       method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
       body: JSON.stringify({
@@ -431,8 +174,9 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => { if (body?.explanation) setAgentExplanation({ for: recKey, explanation: body.explanation as Explanation }); })
-      .catch(() => undefined);
-    return () => controller.abort();
+      .catch(() => undefined)
+      .finally(() => { if (!controller.signal.aborted) setExplaining(false); });
+    return () => { controller.abort(); setExplaining(false); };
     // The answers are fixed while the result is on screen, so the recommendation id is the only trigger.
   }, [step, recKey]);
 
@@ -466,32 +210,34 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
           <h1 className="text-t1" tabIndex={-1} data-screen-heading>Get a starting setup</h1>
           <p className="mt-2 text-fg-secondary">Pick a port and a date to see which lures to run, how deep and how fast, and why.</p>
         </div>
-        <label className="flex flex-col gap-1">
-          <span className="text-t3">Port</span>
-          <select value={portName} onChange={(e) => setPortName(e.target.value)} className={inputClass}>
-            {ports.map((p) => <option key={p.name} value={p.name}>{p.name}, {p.state}</option>)}
-          </select>
-        </label>
-        <div className="-mt-2 flex flex-col gap-1">
-          <Button variant="ghost" size="touch" className="-ml-3 self-start px-3" disabled={locating} onClick={useMyLocation}>
-            <LocateFixed size={16} strokeWidth={1.5} aria-hidden="true" /> Use my location
-          </Button>
-          <p role="status" className="text-small text-fg-tertiary">{locationNote}</p>
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="flex flex-col gap-1">
-            <span className="text-t3">Date</span>
-            <input
-              ref={dateInput} type="date" value={date} aria-invalid={dateError ? true : undefined} aria-describedby={dateHelp}
-              onChange={(e) => { setDate(e.target.value); setDateError(null); }}
-              onBlur={() => { if (date) setDateError(checkDate(date, today())); }}
-              className={`${inputClass} ${dateError ? "border-danger" : ""}`}
-            />
-          </label>
-          <div id={dateHelp} className="text-small">
-            {dateError ? <p role="alert" className="text-danger">{dateError}</p> : openingDay && date === openingDay ? <p className="text-fg-tertiary">Out of season now. Showing opening day.</p> : null}
+        <Card className="flex flex-col gap-4 p-4">
+          <div className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1">
+              <span className="text-t3">Port</span>
+              <select value={portName} onChange={(e) => setPortName(e.target.value)} className={inputClass}>
+                {ports.map((p) => <option key={p.name} value={p.name}>{p.name}, {p.state}</option>)}
+              </select>
+            </label>
+            <Button variant="ghost" size="touch" className="-ml-3 self-start px-3" disabled={locating} onClick={useMyLocation}>
+              <LocateFixed size={16} strokeWidth={1.5} aria-hidden="true" /> Use my location
+            </Button>
+            <p role="status" className="text-small text-fg-tertiary">{locationNote}</p>
           </div>
-        </div>
+          <div className="flex flex-col gap-1 border-t border-border-subtle pt-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-t3">Date</span>
+              <input
+                ref={dateInput} type="date" value={date} aria-invalid={dateError ? true : undefined} aria-describedby={dateHelp}
+                onChange={(e) => { setDate(e.target.value); setDateError(null); }}
+                onBlur={() => { if (date) setDateError(checkDate(date, today())); }}
+                className={`${inputClass} ${dateError ? "border-danger" : ""}`}
+              />
+            </label>
+            <div id={dateHelp} className="text-small">
+              {dateError ? <p role="alert" className="text-danger">{dateError}</p> : openingDay && date === openingDay ? <p className="text-fg-tertiary">Out of season now. Showing opening day.</p> : null}
+            </div>
+          </div>
+        </Card>
         <div className="mt-auto flex flex-col gap-2 md:mt-0">
           {errorLine}
           <Button type="submit" variant="primary" size="touch" disabled={!date || busy}>Get setup</Button>
@@ -503,8 +249,24 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
 
   if (step === "questions") {
     const c = rec?.conditions;
+    // A question still needs an answer while the server lists it. A depth choice with no number is one more.
+    const need = rec?.questions ?? [];
+    const left = (fields: QuestionField[]) => fields.filter((f) => need.includes(f)).length;
+    const depthOpen = depthKind !== "none" && !depthGiven;
+    const depthRequired = needsDepth || show("depth");
+    const groups = [
+      { key: "trip", left: left(["time_of_day", "mode"]), shown: true },
+      { key: "water", left: left(["clarity", "sky", "wind"]), shown: show("clarity") || show("sky") || show("wind") },
+      { key: "depth", left: needsDepth || depthOpen ? 1 : 0, shown: true },
+    ].filter((g) => g.shown);
+    const done = groups.filter((g) => g.left === 0).length;
+    const status = (key: string) => {
+      const s = groupStatus(groups.find((g) => g.key === key)!.left);
+      return <Badge tone={s.tone} icon={s.tone === "success" ? Check : undefined}>{s.text}</Badge>;
+    };
+    const part = "border-b border-border-subtle p-4 last:border-b-0";
     return (
-      <form className="flex flex-1 flex-col gap-6" onSubmit={(e) => { e.preventDefault(); if (ready) setStep("result"); }}>
+      <form className="flex flex-1 flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (ready) setStep("result"); }}>
         {back("home")}
         <div>
           <h1 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h1>
@@ -512,36 +274,59 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
           {c?.messages.length ? <p className="mt-1 text-fg-secondary">{c.messages[0]}</p> : null}
         </div>
         <p role="status" aria-live="polite" className="sr-only">{late.length ? `Added: ${late.map((f) => QUESTION_NAME[f]).join(", ")}` : ""}</p>
-        {show("time_of_day") ? <Choice legend="Time on the water" value={time} onChange={setTime} options={[{ value: "before_sunrise", label: "Before sunrise" }, { value: "early", label: "First two hours" }, { value: "day", label: "Daytime" }, { value: "after_sunset", label: "After sunset" }]} /> : null}
-        {show("clarity") ? <div className={fade("clarity")}><Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} /></div> : null}
-        {show("sky") ? <div className={fade("sky")}><Choice legend="Sky" hint={time === "before_sunrise" || time === "after_sunset" ? "Not used in the dark: light is low." : "No forecast covers that time."} value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} /></div> : null}
-        {show("wind") ? <div className={fade("wind")}><Choice legend="Wind" hint="No forecast covers that time." value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} /></div> : null}
-        {show("mode") ? <div className={fade("mode")}><Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /></div> : null}
-        <div className="flex flex-col gap-2">
-          <Choice
-            legend="Depth"
-            hint={needsDepth || (show("depth") && depthKind !== "none") ? "There is no depth default for this month without temperature at depth. Give the break depth or the lure depth you plan to run." : "Optional. Leave it to the app, or give what you know."}
-            value={depthKind}
-            onChange={setDepthKind}
-            options={[...(show("depth") ? [] : [{ value: "none" as const, label: c?.temp_profile ? "Use the buoy" : "Use the default" }]), { value: "break" as const, label: "I know the break" }, { value: "lure" as const, label: "I know my lure depth" }]}
-          />
-          {depthKind !== "none" ? (
-            <label className="flex flex-col gap-1">
-              <span className="text-small text-fg-secondary">{depthKind === "break" ? "Break depth, in feet" : "Lure depth, in feet"}</span>
-              <input type="number" inputMode="numeric" min={0} max={400} required value={depthValue} onChange={(e) => setDepthValue(e.target.value)} className={inputClass} />
-            </label>
-          ) : null}
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-t3" id="lines-label">Lines</span>
-          <div className="flex items-center gap-2" role="group" aria-labelledby="lines-label">
-            <Button size="touch" aria-label="Fewer lines" disabled={lines <= 1} onClick={() => setLines((n) => Math.max(1, n - 1))}><Minus size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
-            <output className="w-8 text-center text-t2 tabular-nums" aria-live="polite">{lines}</output>
-            <Button size="touch" aria-label="More lines" disabled={lines >= 12} onClick={() => setLines((n) => Math.min(12, n + 1))}><Plus size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
+
+        <Card>
+          <CardHeader level="h2" title="Your trip" right={status("trip")} />
+          {show("time_of_day") ? <div className={part}><Choice legend="Time on the water" value={time} onChange={setTime} options={[{ value: "before_sunrise", label: "Before sunrise" }, { value: "early", label: "First two hours" }, { value: "day", label: "Daytime" }, { value: "after_sunset", label: "After sunset" }]} /></div> : null}
+          <div className={`${part} flex items-center justify-between gap-3`}>
+            <span className="text-t3" id="lines-label">Lines</span>
+            <div className="flex items-center gap-2" role="group" aria-labelledby="lines-label">
+              <Button size="touch" aria-label="Fewer lines" disabled={lines <= 1} onClick={() => setLines((n) => Math.max(1, n - 1))}><Minus size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
+              <output className="w-8 text-center text-t2 tabular-nums" aria-live="polite">{lines}</output>
+              <Button size="touch" aria-label="More lines" disabled={lines >= 12} onClick={() => setLines((n) => Math.min(12, n + 1))}><Plus size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
+            </div>
           </div>
-        </div>
+          {show("mode") ? <div className={`${part} ${fade("mode") ?? ""}`}><Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /></div> : null}
+        </Card>
+
+        {show("clarity") || show("sky") || show("wind") ? (
+          <Card>
+            <CardHeader level="h2" title="On the water" right={status("water")} />
+            {show("clarity") ? <div className={`${part} ${fade("clarity") ?? ""}`}><Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} /></div> : null}
+            {show("sky") ? <div className={`${part} ${fade("sky") ?? ""}`}><Choice legend="Sky" hint={time === "before_sunrise" || time === "after_sunset" ? "Not used in the dark: light is low." : "No forecast covers that time."} value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} /></div> : null}
+            {show("wind") ? <div className={`${part} ${fade("wind") ?? ""}`}><Choice legend="Wind" hint="No forecast covers that time." value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} /></div> : null}
+          </Card>
+        ) : null}
+
+        <Card>
+          <CardHeader level="h2" title="Depth" right={status("depth")} />
+          <div className={`${part} flex flex-col gap-2`}>
+            <Choice
+              legend="What you know"
+              tag={depthRequired ? undefined : <Badge kind="label">Optional</Badge>}
+              hint={depthRequired && (needsDepth || depthKind !== "none") ? "There is no depth default for this month without temperature at depth. Give the break depth or the lure depth you plan to run." : "Leave it to the app, or give what you know."}
+              value={depthKind}
+              onChange={setDepthKind}
+              options={[...(show("depth") ? [] : [{ value: "none" as const, label: c?.temp_profile ? "Use the buoy" : "Use the default" }]), { value: "break" as const, label: "I know the break" }, { value: "lure" as const, label: "I know my lure depth" }]}
+            />
+            {depthKind !== "none" ? (
+              <label className="flex flex-col gap-1">
+                <span className="text-small text-fg-secondary">{depthKind === "break" ? "Break depth, in feet" : "Lure depth, in feet"}</span>
+                <input type="number" inputMode="numeric" min={0} max={400} required value={depthValue} onChange={(e) => setDepthValue(e.target.value)} className={inputClass} />
+              </label>
+            ) : null}
+          </div>
+        </Card>
+
         <div className="mt-auto flex flex-col gap-2 md:mt-0">
           {errorLine}
+          {/* Kept in place when everything is done, so the button under it does not move. */}
+          <div className={`flex items-center gap-3 ${done === groups.length ? "invisible" : ""}`}>
+            <div className="flex flex-1 gap-1" role="progressbar" aria-label="Question groups done" aria-valuemin={0} aria-valuemax={groups.length} aria-valuenow={done}>
+              {groups.map((g) => <span key={g.key} className={`h-1 flex-1 rounded-full ${g.left === 0 ? "bg-accent" : "bg-surface-3"}`} />)}
+            </div>
+            <span className="text-small tabular-nums text-fg-tertiary">{done} of {groups.length} done</span>
+          </div>
           <Button type="submit" variant="primary" size="touch" disabled={!ready}>Show setup</Button>
           {!ready && !error ? <p className="text-small text-fg-tertiary">Answer each question to see the setup.</p> : null}
         </div>
@@ -558,12 +343,13 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
     );
   }
 
+  const agentWords = agentExplanation && agentExplanation.for === recKey ? agentExplanation.explanation : null;
   return (
     <div className="flex flex-1 flex-col gap-4">
       {back(rec?.status === "out_of_season" ? "home" : "questions")}
       {rec ? (
         <Result
-          rec={rec} explanation={agentExplanation && agentExplanation.for === recKey ? agentExplanation.explanation : rec.explanation}
+          rec={rec} explanation={agentWords ?? rec.explanation} writing={explaining && !agentWords}
           portName={portName} date={date} modeAnswered={asked.includes("mode")} onConditions={() => setStep("conditions")}
           onTryDate={async (next) => {
             setDate(next);
@@ -573,7 +359,6 @@ export function Quiz({ ports: listed }: { ports: PortOption[] }) {
           }}
         />
       ) : null}
-      <p className="mt-auto border-t border-border-subtle pt-4 text-small text-fg-tertiary">{FOOTER}</p>
     </div>
   );
 }
