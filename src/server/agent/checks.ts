@@ -97,14 +97,16 @@ export function checkAgentOutput(out: AgentOutput, engine: EngineResult, conditi
       prose(label, r.text, new Set([...groupWords, ...ruleWords, ...droppedWords]));
     }
   }
-  prose("conditions summary", out.conditions_summary, spreadWords);
+  // Outside the per-lure reasons, the agent may also name a lure type the engine considered and left out.
+  const anywhere = new Set([...spreadWords, ...droppedWords]);
+  prose("conditions summary", out.conditions_summary, anywhere);
   if ((out.conditions_summary.match(/[.!?](\s|$)/g) ?? []).length > 2) problems.push("conditions summary: more than two sentences");
-  prose("confidence reason", out.confidence_reason, spreadWords);
-  out.caveats.forEach((c, i) => prose(`caveat ${i + 1}`, c, spreadWords));
+  prose("confidence reason", out.confidence_reason, anywhere);
+  out.caveats.forEach((c, i) => prose(`caveat ${i + 1}`, c, anywhere));
   const reportDates = new Set(reports.map((r) => r.report_date));
   out.report_notes.forEach((n, i) => {
     if (!reportDates.has(n.report_date)) problems.push(`report note ${i + 1}: cites a report dated ${n.report_date} that was not provided`);
-    prose(`report note ${i + 1}`, n.text, new Set([...spreadWords, ...reportWords]));
+    prose(`report note ${i + 1}`, n.text, new Set([...anywhere, ...reportWords]));
   });
   if (/[!]/.test(JSON.stringify(out))) problems.push("uses an exclamation mark");
   return { ok: problems.length === 0, problems };
