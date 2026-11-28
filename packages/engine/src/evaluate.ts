@@ -168,7 +168,9 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
   const notes: string[] = [];
   const upwelling = deriveUpwelling(context, t);
   const breakDepth = context.break_depth_ft ?? breakFromProfile(context);
-  const hasTempData = context.temp_source_level <= 4 && (breakDepth !== null || (context.temp_profile?.length ?? 0) >= 2);
+  // The lake model sits between a buoy profile and a buoy's surface reading.
+  const sourceRank = context.temp_source_level === "1m" ? 1.5 : context.temp_source_level;
+  const hasTempData = sourceRank <= 4 && (breakDepth !== null || (context.temp_profile?.length ?? 0) >= 2);
 
   const fields: Fields = {
     month, shore: context.shore, mode: context.mode, temp_source_level: context.temp_source_level,
@@ -237,7 +239,8 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
       const start = (band ? bandEntry(context, band.max) : null) ?? breakDepth;
       const below = Number(base.recommend.extend_below_ft ?? 20);
       if (start !== null) {
-        depth = { min: start, max: start + below };
+        const coarse = (context.profile_resolution_ft ?? 0) / 2;
+        depth = { min: Math.max(0, Math.round(start - coarse)), max: Math.round(start + coarse) + below };
         result.depth_source = base.code;
         fire(base);
       }
@@ -257,12 +260,13 @@ export function evaluate(context: EngineContext, rules: Rule[], thresholds: Thre
       const name = r.recommend.shift_shallower_by_threshold as string;
       const shift = readThreshold(t, name);
       if (shift === null) { skipped.push({ code: r.code, reason: `threshold ${name} has no value` }); continue; }
-      const measured = base?.recommend.depth_from !== undefined && context.temp_source_level <= 1;
+      // A buoy profile and the lake model both already show an upwelling, so neither is shifted again.
+      const measured = base?.recommend.depth_from !== undefined && sourceRank <= 1.5;
       if (depth && !measured) {
         depth = { min: Math.max(0, depth.min - shift), max: Math.max(0, depth.max - shift) };
         fire(r, `Depth range moved ${shift} ft shallower.`);
       } else {
-        fire(r, measured ? "No shift applied: the depth comes from a measured profile." : undefined);
+        fire(r, measured ? (context.temp_source_level === "1m" ? "No shift applied: the depth comes from a modeled profile, which already shows it." : "No shift applied: the depth comes from a measured profile.") : undefined);
       }
     }
   }

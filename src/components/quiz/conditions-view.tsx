@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, Panel, Zone } from "@/components/ui/card";
 import { capBadges, isStale } from "@/lib/chips";
 import { ago, compass, windHistoryLine } from "@/lib/format";
+import { ModelProfile } from "./profile-chart";
 
 const hasWater = (r: StationReading) => r.water_temp_f !== null || r.wave_height_ft !== null || Boolean(r.temp_profile?.length);
 const hasWind = (r: StationReading) => r.wind_speed_mph !== null;
@@ -170,7 +171,8 @@ export function ConditionsView({ c }: { c: Conditions }) {
         ) : null}
       </div>
       <Zone label="Water">
-        {water.length ? rows(water, false) : <p className="text-fg-secondary">No station within {c.limits.max_miles} miles has reported water temperature or waves in the last three days.</p>}
+        {c.model ? <ModelProfile model={c.model} now={c.now} timeZone={c.forecast_panel.time_zone} /> : null}
+        {water.length ? rows(water, false) : c.model ? null : <p className="text-fg-secondary">No station within {c.limits.max_miles} miles has reported water temperature or waves in the last three days.</p>}
       </Zone>
       <Zone label="Wind">
         {wind.length ? rows(wind, false) : null}

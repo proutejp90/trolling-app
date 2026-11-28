@@ -567,6 +567,93 @@ test.describe("prefilled conditions and the forecast panel", () => {
   });
 });
 
+test.describe("lake model", () => {
+  test.describe.configure({ mode: "serial" });
+  // Pentwater gets modeled profiles for the fixture hour: warm to 40 ft, cold below. No other test uses that port.
+  let db: pg.Client;
+  test.beforeAll(async () => {
+    db = new pg.Client({ connectionString: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/conditions" });
+    await db.connect();
+    const port = (await db.query("select id from public.ports where name = 'Pentwater'")).rows[0].id;
+    const bottoms = { near: 18.29, mid: 60.96, off: 76.2 };
+    for (const [i, label] of (["near", "mid", "off"] as const).entries()) {
+      const bottom = bottoms[label], breakM = Math.min(12.19, bottom * 0.8);
+      const profile = Array.from({ length: 20 }, (_, k) => { const depth = Math.round(((k + 0.5) / 20) * bottom * 100) / 100; return { depth_m: depth, temp_c: depth < breakM ? 19.56 : 6 }; });
+      const cold = profile.findIndex((p) => p.temp_c === 6), mid = Math.round(((profile[cold - 1]!.depth_m + profile[cold]!.depth_m) / 2) * 100) / 100;
+      const point = (await db.query(
+        `insert into public.model_points (port_id, label, lat, lon, node_index, bottom_depth_m) values ($1, $2, 43.78, $3, $4, $5)
+         on conflict (port_id, label) do update set bottom_depth_m = excluded.bottom_depth_m returning id`,
+        [port, label, -86.5 - i * 0.03, 200 + i, bottom],
+      )).rows[0].id;
+      await db.query(
+        `insert into public.model_profiles (model_point_id, run_at, valid_at, is_forecast, profile, surface_temp_c, break_depth_m, band_depth_m)
+         values ($1, '2026-10-14T11:00:00Z', '2026-10-14T14:00:00Z', false, $2, 19.56, $3, $3)
+         on conflict (model_point_id, valid_at) do update set run_at = excluded.run_at, profile = excluded.profile, break_depth_m = excluded.break_depth_m, band_depth_m = excluded.band_depth_m`,
+        [point, JSON.stringify(profile), mid],
+      );
+    }
+  });
+  test.afterAll(async () => {
+    await db.query("delete from public.model_points where port_id = (select id from public.ports where name = 'Pentwater')");
+    await db.end();
+  });
+
+  async function toResult(page: Page) {
+    await open(page, "Pentwater");
+    // October has no depth default, but the model gives one, so depth is not asked.
+    await expect(page.getByText("There is no depth default for this month")).toHaveCount(0);
+    for (const [legend, option] of [["Water clarity", "Clear"], ["Sky", "Bright"], ["Wind", "Breezy or more"]] as const) if (await group(page, legend).count()) await choose(page, legend, option);
+    await shown(page);
+  }
+
+  test("with no buoy profile, depth comes from the model and is labeled modeled", async ({ page }) => {
+    await toResult(page);
+    await expect(page.getByText("Medium confidence")).toBeVisible();
+    await expect(page.getByText("Depth comes from NOAA's lake model, run 3 hours ago. It is modeled, not measured.")).toBeVisible();
+    await expect(page.getByText("Depth · modeled")).toBeVisible();
+    await expect(page.getByText("Water 67.2 °F · modeled")).toBeVisible();
+    await expect(page.getByText("Model run 3 h old")).toBeVisible();
+    await expect(page.getByText(/· buoy$/).filter({ hasText: "Water" })).toHaveCount(0); // no buoy is credited with a modeled number
+    await expect(page.getByText("35 to 65").first()).toBeVisible(); // the break's 10 ft range, and 20 ft below it
+  });
+
+  test("the Conditions screen charts the profile at each sample point, with the break as a range", async ({ page }) => {
+    await toResult(page);
+    await page.getByRole("button", { name: "View conditions" }).click();
+    const card = page.locator("section", { has: page.getByRole("heading", { name: "Temperature at depth" }) }).last();
+    await expect(card.getByText("Modeled", { exact: true })).toBeVisible();
+    await expect(card.getByText(/NOAA lake model, run 3 hours ago\. Modeled, not measured/)).toBeVisible();
+    const tabs = card.getByRole("group", { name: "Sample point" }).getByRole("button");
+    await expect(tabs).toHaveText([/Near shore\s*60 ft of water/, /Mid\s*200 ft of water/, /Offshore\s*250 ft of water/]);
+    await expect(tabs.nth(1)).toHaveAttribute("aria-pressed", "true");
+    await expect(card.getByText("Break 35 to 45 ft down. Surface 67.2 °F.")).toBeVisible();
+    await expect(card.getByText("The model resolves about 10 ft here, so the break is a range.")).toBeVisible();
+    await expect(card.getByRole("img", { name: /Modeled water temperature by depth, mid point, over 200 feet of water/ })).toBeVisible();
+    // The near point has thinner layers, so its break is a tighter range.
+    await tabs.first().click();
+    await expect(card.getByText(/^Break \d+ to \d+ ft down\. Surface 67\.2 °F\.$/)).toBeVisible();
+    await expect(card.getByText("The model resolves about 3 ft here, so the break is a range.")).toBeVisible();
+    // The same numbers as a table, for anyone who cannot use the chart.
+    await card.getByText("Show as a table").click();
+    await expect(card.locator("tbody tr")).toHaveCount(20);
+  });
+
+  test("the angler can say which water they fish, and the depth follows", async ({ page }) => {
+    await toResult(page);
+    await page.getByRole("button", { name: "Change conditions" }).click();
+    const row = page.getByRole("listitem").filter({ has: page.getByText("Water fished", { exact: true }) });
+    await expect(row).toContainText("Mid, 200 ft of water");
+    await expect(row).toContainText("Default");
+    await expect(page.getByRole("listitem").filter({ has: page.getByText("Depth", { exact: true }) })).toContainText("Modeled");
+    await page.getByRole("button", { name: "Change water fished" }).click();
+    await choose(page, "Water fished", "Near shore, 60 ft");
+    await expect(row).toContainText("Near shore, 60 ft of water");
+    await expect(row).toContainText("Your answer");
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByText("35 to 65")).toHaveCount(0);
+  });
+});
+
 test.describe("port and location", () => {
   const portOrder = (page: Page) => page.getByLabel("Port").locator("option").allTextContents();
 

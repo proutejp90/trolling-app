@@ -44,6 +44,7 @@ export function allowedNumbers(engine: EngineResult, conditions: Conditions, dat
   for (const type of groupsOf(engine)) add(engine.setups.filter((s) => s.lure_type === type).length);
   add(conditions.water_temp_surface_f, conditions.temp_station?.distance_mi, conditions.age_minutes, conditions.age_minutes === null ? null : Math.round(conditions.age_minutes / 60));
   add(conditions.forecast?.sky_cover_pct, conditions.forecast?.wind_speed_mph, conditions.wind_history.length);
+  if (conditions.model) add(Math.round(conditions.model.age_hours), ...conditions.model.points.flatMap((p) => [p.water_depth_ft, p.surface_temp_f, p.break_ft?.min, p.break_ft?.max]));
   add(conditions.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length);
   for (const p of conditions.temp_profile ?? []) add(p.depth_ft, p.temp_f);
   add(Number(date.slice(8, 10)), Number(date.slice(0, 4)));
@@ -102,6 +103,8 @@ export function checkAgentOutput(out: AgentOutput, engine: EngineResult, conditi
   prose("conditions summary", out.conditions_summary, anywhere);
   if ((out.conditions_summary.match(/[.!?](\s|$)/g) ?? []).length > 2) problems.push("conditions summary: more than two sentences");
   prose("confidence reason", out.confidence_reason, anywhere);
+  // A depth from NOAA's lake model must be called modeled, or a forecast, in the one place the source is said.
+  if (conditions.temp_source_level === "1m" && !/model|forecast/i.test(out.confidence_reason)) problems.push("confidence reason: the depth is modeled and the reason does not say so");
   out.caveats.forEach((c, i) => prose(`caveat ${i + 1}`, c, anywhere));
   const reportDates = new Set(reports.map((r) => r.report_date));
   out.report_notes.forEach((n, i) => {

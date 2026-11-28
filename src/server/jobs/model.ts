@@ -5,7 +5,9 @@
  */
 import type { Threshold } from "@recommender/engine";
 import { z } from "zod";
+import { distanceMi } from "../../../seed/geo";
 import type { Queryable } from "../db";
+import { steepestDropM } from "../model";
 
 const point = z.object({
   port_id: z.string().uuid(), label: z.enum(["near", "mid", "off"]),
@@ -38,6 +40,47 @@ export async function modelSetup(q: Queryable, thresholds: Threshold[]) {
     temp_band_top_f: band !== null && typeof band === "object" ? band.max : 55,
     ports: rows.map((r) => ({ id: r.id as string, name: r.name as string, lat: Number(r.lat), lon: Number(r.lon), shore: r.shore as "east" | "west" })),
   };
+}
+
+/**
+ * Keeps the model honest: wherever a buoy has measured a temperature profile within a few miles
+ * of a sample point, the measured and modeled break depths are stored side by side. Run from
+ * the conditions refresh, after new readings arrive. One row per point and reading.
+ */
+export async function recordModelChecks(q: Queryable, thresholds: Threshold[], now: Date): Promise<number> {
+  const maxMiles = Number(thresholds.find((t) => t.name === "model_check_max_miles")?.value ?? 5);
+  const { rows } = await q.query(
+    `select mp.id as point_id, mp.lat as point_lat, mp.lon as point_lon, s.lat as station_lat, s.lon as station_lon,
+            o.observed_at, o.temp_profile, pr.break_depth_m as modeled
+     from public.model_points mp
+     join public.port_stations ps on ps.port_id = mp.port_id
+     join public.stations s on s.id = ps.station_id and s.source <> 'nws'
+     join lateral (
+       select observed_at, temp_profile from public.observations
+       where station_id = s.id and observed_at > $1 and observed_at <= $2 and jsonb_array_length(coalesce(temp_profile, '[]'::jsonb)) >= 3
+       order by observed_at desc limit 1
+     ) o on true
+     join lateral (
+       select break_depth_m from public.model_profiles
+       where model_point_id = mp.id and valid_at between o.observed_at - interval '45 minutes' and o.observed_at + interval '45 minutes'
+       order by abs(extract(epoch from valid_at - o.observed_at)) limit 1
+     ) pr on true
+     where pr.break_depth_m is not null`,
+    [new Date(now.getTime() - 3 * 3_600_000), now],
+  );
+  let stored = 0;
+  for (const r of rows) {
+    if (distanceMi(Number(r.point_lat), Number(r.point_lon), Number(r.station_lat), Number(r.station_lon)) > maxMiles) continue;
+    const measured = steepestDropM(r.temp_profile as { depth_m: number; temp_c: number }[]);
+    if (measured === null) continue;
+    const res = await q.query(
+      `insert into public.model_checks (model_point_id, checked_at, measured_source, measured_break_m, modeled_break_m)
+       values ($1, $2, 'buoy', $3, $4) on conflict (model_point_id, checked_at, measured_source) do nothing`,
+      [r.point_id, r.observed_at, measured, r.modeled],
+    );
+    stored += res.rowCount ?? 0;
+  }
+  return stored;
 }
 
 const KEEP_PAST_HOURS = 48; // yesterday's profile is needed to see an upwelling arrive

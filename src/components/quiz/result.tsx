@@ -148,9 +148,10 @@ export function Result({ rec, explanation, writing, portName, date, modeAnswered
   }
   const confidence = CONFIDENCE[rec.confidence];
   const c = rec.conditions;
-  const age = dataAge(c.age_minutes, c.limits.fresh_hours);
+  const modeled = c.temp_source_level === "1m";
+  const age = dataAge(c.age_minutes, c.limits.fresh_hours, modeled ? { forecast: Boolean(c.model?.is_forecast) } : null);
   const chips = conditionChips({
-    water: { temp_f: c.water_temp_surface_f, has_station: Boolean(c.temp_station) }, inputs: rec.inputs, sources: rec.sources, upwelling: Boolean(result.upwelling_likely),
+    water: { temp_f: c.water_temp_surface_f, has_station: Boolean(c.temp_station), modeled }, inputs: rec.inputs, sources: rec.sources, upwelling: Boolean(result.upwelling_likely),
   });
   const lines = result.setups.length;
   const leftOut = [...result.dropped_types.map((d) => d.reason), ...result.dropped_lures.map((d) => `${d.name}: ${d.reason}`), ...result.notes];
