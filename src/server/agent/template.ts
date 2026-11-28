@@ -13,18 +13,15 @@ export const tagsOf = (engine: EngineResult, code: string): Tag[] => engine.fire
 export const speedReason = (type: SetupLureType): Reason | null =>
   type === "plug" ? null : { text: TYPE_SPEED_REASON[type].text, rule_codes: [], tags: TYPE_SPEED_REASON[type].tags };
 
-export function conditionsSummary(engine: EngineResult, conditions: Conditions): string {
-  const location = REASONS[engine.fired.find((f) => f.stage === "location")?.code ?? ""] ?? "";
-  const water = conditions.temp_station
-    ? `${conditions.temp_station.name} read ${conditions.water_temp_surface_f} °F at the surface.`
-    : conditions.messages[0] ?? "";
-  return `${location} ${water}`.trim();
+/** Where the fish are this time of year. Where the data came from is left to the confidence reason. */
+export function conditionsSummary(engine: EngineResult): string {
+  return REASONS[engine.fired.find((f) => f.stage === "location")?.code ?? ""] ?? "";
 }
 
-export function templateExplanation(engine: EngineResult, conditions: Conditions, confidenceReason: string): Explanation {
+export function templateExplanation(engine: EngineResult, _conditions: Conditions, confidenceReason: string): Explanation {
   return {
     source: "template", prompt_version: null, model: null,
-    conditions_summary: conditionsSummary(engine, conditions),
+    conditions_summary: conditionsSummary(engine),
     groups: groupsOf(engine).map((type) => {
       const speed = speedReason(type);
       return {

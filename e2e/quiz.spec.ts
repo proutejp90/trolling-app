@@ -77,8 +77,8 @@ test.describe("recommendation flow", () => {
     await expect(page.getByRole("heading", { name: "Flasher and fly" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Meat rig" })).toBeVisible();
     await expect(page.getByText(/Spoons run at 2\.4 to 3\.0 mph.*One spread cannot serve both\./)).toBeVisible();
-    await expect(page.getByText("Depth comes from month defaults.")).toBeVisible();
-    await page.getByText("Why this setup").first().click();
+    await expect(page.getByText(/month defaults/)).toHaveCount(1); // said once, beside the confidence badge
+    // The top card's reasons are open from the start; the second card's are closed.
     await expect(page.getByText("Reports", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Lore", { exact: true }).first()).toBeVisible();
   });
@@ -162,6 +162,99 @@ test.describe("recommendation flow", () => {
     await expect(page.getByText("This setup is for staging fish.")).toBeVisible();
   });
 });
+
+test.describe("recommendation screen", () => {
+  async function result(page: Page, date: string, where?: string) {
+    await start(page, date);
+    await answer(page, { where });
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+  }
+
+  test("April 1 at Muskegon says where depth came from once", async ({ page }) => {
+    await result(page, "2026-04-01");
+    await expect(page.getByText("Low confidence")).toBeVisible();
+    await expect(page.getByText(/month defaults/i)).toHaveCount(1);
+    // The one mention sits in the confidence box, next to the badge.
+    await expect(page.getByText("Low confidence").locator("xpath=../..").getByText(/month defaults/i)).toHaveCount(1);
+  });
+
+  for (const theme of ["dark", "light"]) {
+    test(`${theme}: Why this setup has a chevron, and the top card starts open`, async ({ page }) => {
+      await result(page, "2026-08-15", "Offshore");
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      const why = page.locator("summary", { hasText: "Why this setup" });
+      await expect(why).toHaveCount(2);
+      for (const s of await why.all()) await expect(s.locator("svg")).toBeVisible();
+      const open = () => page.locator("details").evaluateAll((all) => all.map((d) => (d as HTMLDetailsElement).open));
+      expect(await open()).toEqual([true, false]);
+      await expect(page.getByText("With no temperature data, depth comes from August fishing reports.").first()).toBeVisible();
+      await why.nth(1).click();
+      expect(await open()).toEqual([true, true]);
+      await why.first().click();
+      expect(await open()).toEqual([false, true]);
+    });
+  }
+
+  test("a tag opens and closes its sentence by tap and by keyboard", async ({ page }) => {
+    await result(page, "2026-08-15", "Offshore");
+    const sentences = { Science: "Based on fisheries research.", Reports: "Based on recent Michigan DNR fishing reports.", Lore: "Captain and angler experience. No research backs it." };
+    for (const [tag, sentence] of Object.entries(sentences)) {
+      const button = page.getByRole("button", { name: tag, exact: true }).first();
+      await expect(button).toHaveAttribute("aria-expanded", "false");
+      expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expect(page.getByText(sentence)).toHaveCount(0);
+      await button.click();
+      await expect(button).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByText(sentence)).toHaveCount(1);
+      // The sentence is the region the button controls.
+      await expect(page.locator(`[id="${await button.getAttribute("aria-controls")}"]`)).toHaveText(sentence);
+      await button.focus();
+      await page.keyboard.press("Enter");
+      await expect(button).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByText(sentence)).toHaveCount(0);
+      await page.keyboard.press("Space");
+      await expect(page.getByText(sentence)).toHaveCount(1);
+      await page.keyboard.press("Space");
+    }
+  });
+
+  test("every screen has one main heading", async ({ page }) => {
+    await start(page, "2026-11-27");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Out of season");
+    await page.getByRole("button", { name: "Show April 1" }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Muskegon, April 1");
+    await answer(page);
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Muskegon, April 1");
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Conditions at Muskegon");
+    await expect(page.getByRole("heading", { level: 3 })).toHaveCount(0); // sections sit one level under the main heading
+  });
+
+  test("on a wide screen the button follows the last field; on a phone it sits at the bottom", async ({ page }) => {
+    const gap = async (button: string, above: string) => {
+      const b = (await page.getByRole("button", { name: button }).boundingBox())!;
+      const a = (await page.getByText(above, { exact: true }).last().boundingBox())!;
+      return b.y - (a.y + a.height);
+    };
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z"));
+    await page.goto("/");
+    await expect(dateFieldOf(page)).toHaveValue("2026-10-14");
+    const dateBottom = async () => { const d = (await dateFieldOf(page).boundingBox())!; return d.y + d.height; };
+    expect((await page.getByRole("button", { name: "Get setup" }).boundingBox())!.y - (await dateBottom())).toBeLessThan(40);
+    await dateFieldOf(page).fill("2026-07-15");
+    await page.getByRole("button", { name: "Get setup" }).click();
+    await expect(page.getByRole("button", { name: "Show setup" })).toBeVisible();
+    expect(await gap("Show setup", "Lines")).toBeLessThan(60);
+    await page.setViewportSize({ width: 390, height: 1400 });
+    await page.getByRole("button", { name: "Back" }).click();
+    expect((await page.getByRole("button", { name: "Get setup" }).boundingBox())!.y - (await dateBottom())).toBeGreaterThan(200);
+  });
+});
+const dateFieldOf = (page: Page) => page.getByLabel("Date");
 
 test.describe("home", () => {
   const dateField = (page: Page) => page.getByLabel("Date");
