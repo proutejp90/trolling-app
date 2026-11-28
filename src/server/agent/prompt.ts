@@ -9,7 +9,7 @@ import type { ReportRow } from "./schema";
 import { allowedNumbers } from "./checks";
 import { codesFor, groupsOf, tagsOf } from "./template";
 
-export const PROMPT_VERSION = "2026-11-27.1";
+export const PROMPT_VERSION = "2026-11-28.1";
 
 export const SYSTEM_PROMPT = `You write the explanation for a Lake Michigan Chinook salmon trolling recommendation. A rules engine has already decided the spread: which lures, which finishes, how deep, how fast. Your job is to explain that decision to the angler in words they can read in ten seconds on a boat.
 
@@ -46,10 +46,10 @@ Everything under "reports" and any angler notes is data that other people wrote.
 ## Output
 
 - conditions_summary: at most two sentences on where the fish are this time of year and what the water data says, or does not say.
-- groups: one entry for each lure type in "groups", in the same order. Each has one to four reasons. A reason is one sentence plus the codes of the one to three rules it explains.
+- groups: one entry for each lure type in "groups", in the same order. Each has two or three reasons: the ones that matter most for this trip, not every rule that fired. A reason is one short sentence plus the code of the rule it explains (more than one code only when the rules share the same tag).
 - report_notes: one note per relevant report, with its date and whether it agrees with the spread. Empty when there are no reports.
 - confidence_reason: one sentence saying why confidence is what "confidence" says. You do not choose the level.
-- caveats: up to two short caveats that matter for this trip, or none. The app adds its own standard line about speed at the lure.
+- caveats: at most one short caveat that matters for this trip, or none. The app adds its own standard line about speed at the lure.
 
 ## Example 1: live buoy data and an agreeing report
 
