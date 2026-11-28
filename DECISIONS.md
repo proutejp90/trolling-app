@@ -207,7 +207,7 @@ Source: `docs/UI-REVIEW-FIXES.md`.
 - **The summary line** now says only where the fish are this time of year, from the agent and from the template. The buoy reading that used to follow it in the template still shows in the confidence box.
 - **Prompt version `2026-11-28.2`.** The agent is told to keep data sources out of the summary and caveats and to name the depth source in the confidence reason. This is an instruction, not a server check: an agent answer that ignores it still passes, and the screen rules above keep the depth source to one mention in the box and caveats but not in the summary line.
 - **Section headings** under each screen's `h1` moved from `h3` to `h2` so the levels do not skip. Their styles are unchanged. "Out of season" is that screen's `h1`.
-- **Tag buttons** are 44px tall with the badge centered inside, and the reason text is centered against them. The sentence opens under the reason; one tag's sentence shows at a time per reason. "If nothing bites" tips use the same tappable tags.
+- **Tag chips are an on-water departure from Meridian.** Meridian says badges are not buttons. A tag chip is a button that draws a badge inside it, so the badge itself stays a badge. Tag buttons are 44px tall with the badge centered inside, and the reason text is centered against them. The sentence opens under the reason; one tag's sentence shows at a time per reason. "If nothing bites" tips use the same tappable tags.
 - **Wide screens** means Tailwind's `md` breakpoint, 768px.
 
 ## Still open for later phases
