@@ -8,6 +8,13 @@ import type { ModelCall } from "./explain";
 export const agentModel = () => process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
 export const agentConfigured = () => Boolean(process.env.ANTHROPIC_API_KEY);
 
+/**
+ * Thinking adds seconds to a short, tightly specified writing task whose output is checked anyway.
+ * Haiku 5.5 accepts thinking off at this effort; Opus 5.5 rejects it, so there the setting is left alone.
+ */
+export const thinkingFor = (model: string): { thinking?: { type: "disabled" } } =>
+  model.startsWith("claude-haiku-5-5") ? { thinking: { type: "disabled" } } : {};
+
 let client: Anthropic | null = null;
 
 export const callModel: ModelCall = async ({ system, user, retryNote, previous, signal }) => {
@@ -18,6 +25,7 @@ export const callModel: ModelCall = async ({ system, user, retryNote, previous, 
     {
       model: agentModel(),
       max_tokens: 4000,
+      ...thinkingFor(agentModel()),
       // The instructions and examples never change between requests, so they are cached.
       system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
       messages,

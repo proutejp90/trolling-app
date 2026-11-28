@@ -208,6 +208,15 @@ describe("explain: retry and fallback", () => {
   });
 });
 
+describe("thinking setting by model", () => {
+  it("turns thinking off only for the model that accepts it", async () => {
+    const { thinkingFor } = await import("../src/server/agent/client");
+    expect(thinkingFor("claude-haiku-5-5")).toEqual({ thinking: { type: "disabled" } });
+    expect(thinkingFor("claude-opus-5-5")).toEqual({});
+    expect(thinkingFor("claude-sonnet-5-5")).toEqual({});
+  });
+});
+
 describe("the prompt", () => {
   it("states the role, the limits, the tags, the untrusted-text rule and two worked examples", () => {
     for (const part of ["What you may do", "What you may not do", "Evidence tags", "Untrusted text", "Example 1", "Example 2", "allowed_numbers"]) expect(SYSTEM_PROMPT).toContain(part);
