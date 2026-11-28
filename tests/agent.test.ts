@@ -77,6 +77,12 @@ describe("server-side checks", () => {
     expect(check(edit((o) => { o.groups[0]!.reasons[1]!.text = "Flasher and fly leads here; the spoon line was left out."; })).ok).toBe(true);
   });
 
+  it("lets a caveat name a lure type the engine left out, but not one it never considered", () => {
+    expect(engine.dropped_types.map((d) => d.lure_type)).toEqual(["spoon"]);
+    expect(check(edit((o) => { o.caveats = ["Spoons were left out because they cannot share this speed."]; })).ok).toBe(true);
+    expect(check(edit((o) => { o.caveats = ["Plugs were left out because they cannot share this speed."]; })).ok).toBe(false);
+  });
+
   it("rejects a color that is not on the setup or in the cited rule", () => {
     const r = check(edit((o) => { o.groups[1]!.reasons[0]!.text = "A purple meat rig goes on the deepest lines."; }));
     expect(r.problems.join(" ")).toMatch(/mentions "purple"/);
