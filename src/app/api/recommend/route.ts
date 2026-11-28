@@ -7,7 +7,11 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   const parsed = recommendInput.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: "Check the port, date and answers and try again." }, { status: 400 });
+  if (!parsed.success) {
+    // A bad date is the common case, so it is named: the client shows the message at the Date field.
+    if (parsed.error.issues.some((i) => i.path[0] === "date")) return NextResponse.json({ error: "Enter a date like 07/15/2027.", field: "date" }, { status: 400 });
+    return NextResponse.json({ error: "Check the port, date and answers and try again." }, { status: 400 });
+  }
   try {
     return NextResponse.json(await recommend(parsed.data, { db: hasDb() ? db() : null, now: currentTime() }));
   } catch (err) {

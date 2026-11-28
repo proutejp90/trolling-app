@@ -191,6 +191,15 @@ Source: `docs/UI-REVIEW-FIXES.md`.
 - **A question counts as added late** when it arrives after the first answer for that port and date. Late questions fade in and are announced together ("Added: Sky, Wind"). The fade-in path only runs when a forecast covers part of the date, which none of the recorded in-season fixtures do, so it is not covered by a browser test.
 - **The offshore or staging sentence** shows when the "Where are you fishing" question was on screen, which today is August only.
 
+## UI review fixes, Part B
+
+- **Date check timing.** The date is checked when the angler leaves the field and when they press Get setup, not on each keystroke: a date field passes through years like 0002 while "2027" is being typed. The error clears as soon as the date changes.
+- **Date range** is by calendar year on the device: last year through two years ahead. The server still accepts any four-digit-year date; it now answers a bad date with `field: "date"` and the same "Enter a date like 07/15/2027." message.
+- **The opening-day note** shows while the date is the opening day the app filled in. It goes when the angler picks another date.
+- **"Remember the choice for the session"** is the sorted list of port names in `sessionStorage`. The coordinates are used once to sort and are never stored or sent. Closing the tab forgets it.
+- **Location messages.** A refusal, or a browser with no location support, says "Location is off. Pick a port from the list." A timeout or other failure says "Couldn't get your location. Pick a port from the list." Success says "Nearest port: [name]."
+- **Browser tests pin the device clock** to the fixture time, so the date-range check does not start failing them in a later year.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).
