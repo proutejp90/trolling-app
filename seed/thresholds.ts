@@ -61,6 +61,10 @@ export const thresholds: Threshold[] = [
   t("forecast_horizon_days", 5, "d", "Forecasts are used for trips up to this many days ahead. Beyond it, month defaults.", true),
   t("clarity_answer_max_age_days", 3, "d", "An angler's clarity answer at a port is offered again for this many days.", true),
 
+  // The lake model
+  t("model_max_age_h", 12, "h", "The lake model is skipped when its latest run is older than this."),
+  t("model_agree_ft", 10, "ft", "A buoy or probe within this of the model's break depth raises model confidence to high.", true),
+
   // The forecast panel
   t("forecast_stale_hours", 3, "h", "A forecast fetched longer ago than this is marked stale on the forecast panel."),
   t("alerts_stale_minutes", 30, "min", "Alerts fetched longer ago than this are marked stale on the forecast panel."),
