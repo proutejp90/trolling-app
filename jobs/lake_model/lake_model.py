@@ -12,8 +12,9 @@ hour to NOAA's public archive on AWS. Checked 2026-11-28:
   - `temp` is stored uncompressed, so the netCDF library can read a few nodes over HTTP byte
     ranges ("#mode=bytes") without downloading the file.
 
-This is the one Python program in the repository. It holds no secrets but CRON_SECRET, which
-lets it post to the app; the app writes to the database. Everything it posts is labeled modeled.
+This is the one Python program in the repository. It holds no secret. On GitHub Actions it asks
+GitHub for a short-lived signed token naming this repository and workflow, and the app accepts
+that. (CRON_SECRET also works, for a run from anywhere else.) The app writes to the database.
 
 Usage:
   python lake_model.py                      # newest complete run, post to SITE_URL
@@ -26,6 +27,7 @@ import json
 import math
 import os
 import sys
+import urllib.parse
 import urllib.request
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -179,10 +181,23 @@ def read_step(job: tuple) -> list[dict] | None:
             for i, p in enumerate(points)]
 
 
-def call(site: str, secret: str, method: str, body: dict | None = None) -> dict:
+def credential(site: str) -> str | None:
+    """CRON_SECRET when it is set; otherwise a token from GitHub, good for a few minutes, so it is asked for per call."""
+    secret = os.environ.get("CRON_SECRET")
+    if secret:
+        return secret
+    url, bearer = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL"), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url or not bearer:
+        return None
+    req = urllib.request.Request(f"{url}&audience={urllib.parse.quote(site, safe='')}", headers={"authorization": f"bearer {bearer}"})
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return json.loads(res.read())["value"]
+
+
+def call(site: str, method: str, body: dict | None = None) -> dict:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(f"{site}/api/jobs/model", data=data, method=method,
-                                 headers={"authorization": f"Bearer {secret}", "content-type": "application/json"})
+                                 headers={"authorization": f"Bearer {credential(site)}", "content-type": "application/json"})
     with urllib.request.urlopen(req, timeout=120) as res:
         return json.loads(res.read())
 
@@ -194,13 +209,13 @@ def main() -> int:
     parser.add_argument("--ports", help="JSON file of ports to use in a dry run, in place of the app's list")
     args = parser.parse_args()
 
-    site, secret = os.environ.get("SITE_URL", "").rstrip("/"), os.environ.get("CRON_SECRET", "")
+    site = os.environ.get("SITE_URL", "").rstrip("/")
     if args.ports:
         setup = json.load(open(args.ports))
-    elif site and secret:
-        setup = call(site, secret, "GET")
+    elif site and credential(site):
+        setup = call(site, "GET")
     else:
-        print("SITE_URL and CRON_SECRET are not set. Nothing to do.", file=sys.stderr)
+        print("SITE_URL is not set, or there is neither a GitHub token nor CRON_SECRET. Nothing to do.", file=sys.stderr)
         return 0 if not args.dry_run else 1
     band_top_c = (setup["temp_band_top_f"] - 32) * 5 / 9
 
@@ -233,7 +248,7 @@ def main() -> int:
     batch = len(points) * 24  # a day of hours per request keeps each body small
     stored = 0
     for i in range(0, len(profiles), batch):
-        stored += call(site, secret, "POST", {"run_at": run, "points": points if i == 0 else [], "profiles": profiles[i:i + batch]})["profiles"]
+        stored += call(site, "POST", {"run_at": run, "points": points if i == 0 else [], "profiles": profiles[i:i + batch]})["profiles"]
     print(f"stored {stored} profiles", file=sys.stderr)
     return 0
 

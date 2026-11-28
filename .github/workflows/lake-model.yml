@@ -11,13 +11,18 @@ concurrency:
   group: lake-model
   cancel-in-progress: false
 
+# The job proves who it is with a token GitHub signs for this workflow, so no secret is stored here.
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   read:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      SITE_URL: ${{ vars.SITE_URL }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      # The live site. Set a repository variable named SITE_URL to point somewhere else.
+      SITE_URL: ${{ vars.SITE_URL || 'https://evanstism.netlify.app' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,9 +32,4 @@ jobs:
           cache-dependency-path: jobs/lake_model/requirements.txt
       - run: pip install -r jobs/lake_model/requirements.txt
       - name: Read the model and post it
-        run: |
-          if [ -z "$SITE_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "::warning::SITE_URL (repository variable) or CRON_SECRET (repository secret) is not set, so the lake model was not read."
-            exit 0
-          fi
-          python jobs/lake_model/lake_model.py
+        run: python jobs/lake_model/lake_model.py
