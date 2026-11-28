@@ -115,10 +115,16 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     await refresh("winter", "2026-08-10T14:00:00Z");
     const now = new Date("2026-08-10T14:00:00Z");
     const first = await recommend({ port: "Muskegon", date: "2026-08-10" }, { db, now });
-    expect(first.questions).toEqual(["time_of_day", "clarity", "mode"]);
+    // No forecast covers any part of the date, so sky and wind are asked at once and nothing is added later.
+    expect(first.questions).toEqual(["time_of_day", "clarity", "sky", "wind", "mode"]);
+    expect(first.conditions.forecast_covers_date).toBe(false);
     const second = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore" } }, { db, now });
     expect(second.questions).toEqual(["wind"]); // before sunrise the light is low; no forecast, so wind is asked
     expect(second.sources.sky).toBe("time of day");
+    // In the dark the light is low whatever the angler said about the sky earlier.
+    const dark = await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore", sky: "bright", wind: "calm" } }, { db, now });
+    expect(dark.sources.sky).toBe("time of day");
+    expect(dark.engine).toEqual((await recommend({ port: "Muskegon", date: "2026-08-10", time_of_day: "before_sunrise", answers: { clarity: "clear", mode: "offshore", wind: "calm" } }, { db, now })).engine);
   });
 
   it("one failing station does not stop the cycle", async () => {

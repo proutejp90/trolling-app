@@ -146,6 +146,15 @@ describe("forecast, sky and light", () => {
     }
   });
 
+  it("says whether any forecast covers the date, before a time is chosen", () => {
+    const noTime = build([], { timeOfDay: null });
+    expect(noTime.forecast_covers_date).toBe(false);
+    // One forecast hour near the daytime trip is enough: part of the date is covered.
+    expect(build([], { timeOfDay: null, forecasts: forecastAt(base, { sky_cover_pct: 40 }) }).forecast_covers_date).toBe(true);
+    const weekEarlier = [{ valid_at: new Date(new Date(base.trip_time!).getTime() - 7 * 86_400_000), sky_cover_pct: 40, wind_dir_deg: null, wind_speed_ms: null, hazards: [] }];
+    expect(build([], { timeOfDay: null, forecasts: weekEarlier }).forecast_covers_date).toBe(false);
+  });
+
   it("leaves sky and wind unknown, and says so, when no forecast covers the trip", () => {
     expect(base).toMatchObject({ sky: null, wind_calm: null, forecast: null });
     expect(base.messages).toContain("No forecast covers that time, so sky and wind come from your answers.");

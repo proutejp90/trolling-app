@@ -16,6 +16,7 @@ type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
 type Clarity = "clear" | "stained" | "murky" | "unknown";
 type Sky = "bright" | "overcast" | "low_light";
 
+const QUESTION_NAME: Record<QuestionField, string> = { time_of_day: "Time on the water", clarity: "Water clarity", sky: "Sky", wind: "Wind", mode: "Where are you fishing", depth: "Depth" };
 const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
 const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8]!;
 const ago = (minutes: number) => (minutes < 60 ? `${minutes} minutes ago` : minutes < 36 * 60 ? `${Math.round(minutes / 60)} hours ago` : `${Math.round(minutes / 1440)} days ago`);
@@ -102,13 +103,13 @@ function nextSeasonStart(date: string): string {
   return `${Number(date.slice(5, 7)) > 10 ? year + 1 : year}-04-01`;
 }
 
-function Result({ rec, explanation, portName, date, onConditions, onTryDate }: { rec: Recommendation; explanation: Explanation; portName: string; date: string; onConditions: () => void; onTryDate: (date: string) => void }) {
+function Result({ rec, explanation, portName, date, modeAnswered, onConditions, onTryDate }: { rec: Recommendation; explanation: Explanation; portName: string; date: string; modeAnswered: boolean; onConditions: () => void; onTryDate: (date: string) => void }) {
   const result: EngineResult = rec.engine;
   if (rec.status === "out_of_season") {
     const opening = nextSeasonStart(date);
     return (
       <div className="flex flex-col gap-3 rounded-md border border-border-subtle bg-surface-2 p-4">
-        <h2 className="text-t3">Out of season</h2>
+        <h2 className="text-t3" tabIndex={-1} data-screen-heading>Out of season</h2>
         <p className="text-fg-secondary">
           {monthName(date)} is outside the season. The rules cover April through October. Go back to pick a date in that range, or see the setup for opening day.
         </p>
@@ -126,10 +127,11 @@ function Result({ rec, explanation, portName, date, onConditions, onTryDate }: {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-t2">{portName}, {monthName(date)}</h2>
+        <h2 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h2>
         <p className="mt-1 text-fg-secondary">
           {explanation.conditions_summary}
-          {result.mode === "staging" ? " This setup is for staging fish." : " This setup is for offshore fish."}
+          {/* Said only when the angler chose where to fish. In other months the summary already places the fish. */}
+          {modeAnswered ? (result.mode === "staging" ? " This setup is for staging fish." : " This setup is for offshore fish.") : ""}
           {result.water_depth_ft ? ` Fish over ${result.water_depth_ft.min} to ${result.water_depth_ft.max} ft of water.` : ""}
         </p>
       </div>
@@ -209,7 +211,7 @@ function ConditionsView({ c }: { c: Conditions }) {
   const north = c.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-t2">Conditions at {c.port.name}</h2>
+      <h2 className="text-t2" tabIndex={-1} data-screen-heading>Conditions at {c.port.name}</h2>
       {c.messages.length ? (
         <ul className="flex list-disc flex-col gap-2 rounded-md border border-border-subtle bg-surface-1 p-3 pl-8 text-fg-secondary">
           {c.messages.map((m) => <li key={m}>{m}</li>)}
@@ -289,6 +291,18 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   const [error, setError] = useState<string | null>(null);
   const [agentExplanation, setAgentExplanation] = useState<{ for: string; explanation: Explanation } | null>(null);
   const latest = useRef(0);
+  // Questions added after the form first rendered: they fade in and are announced, so a shift is never silent.
+  const askedNow = useRef<QuestionField[]>([]);
+  const [late, setLate] = useState<QuestionField[]>([]);
+  const resetAsked = () => { askedNow.current = []; setAsked([]); setLate([]); };
+
+  // Each screen opens at the top with its main heading focused, as a new page would.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!opened.current) { opened.current = true; return; }
+    window.scrollTo({ top: 0, behavior: "instant" });
+    document.querySelector<HTMLElement>("[data-screen-heading]")?.focus({ preventScroll: true });
+  }, [step]);
 
   // Today's date is set on the device so the page carries no stale date.
   useEffect(() => { setDate((d) => d || new Date().toLocaleDateString("en-CA")); }, []);
@@ -317,7 +331,13 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
       setError(null);
       setRec(body as Recommendation);
       // A question stays on screen once asked, so answering it does not make it vanish.
-      setAsked((prev) => [...new Set([...prev, ...(body as Recommendation).questions])]);
+      const before = askedNow.current;
+      const added = (body as Recommendation).questions.filter((q) => !before.includes(q));
+      if (added.length) {
+        if (before.length) setLate((prev) => [...prev, ...added]);
+        askedNow.current = [...before, ...added];
+        setAsked(askedNow.current);
+      }
       return body as Recommendation;
     } catch {
       if (id === latest.current) setError("Couldn't build a setup. Check your connection and try again.");
@@ -357,6 +377,7 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
   const needsDepth = rec?.questions.includes("depth") ?? false;
   const ready = rec?.status === "ok" && !busy;
   const show = (f: QuestionField) => asked.includes(f);
+  const fade = (f: QuestionField) => (late.includes(f) ? "fade-in" : undefined);
 
   const back = (to: Step) => (
     <button type="button" onClick={() => setStep(to)} className="-ml-2 inline-flex h-touch items-center gap-2 self-start rounded-sm px-2 text-fg-secondary hover:bg-surface-3 hover:text-fg">
@@ -371,13 +392,13 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
         className="flex flex-1 flex-col gap-4"
         onSubmit={async (e) => {
           e.preventDefault();
-          setAsked([]);
+          resetAsked();
           const first = await ask();
           if (first) setStep(first.status === "out_of_season" ? "result" : "questions");
         }}
       >
         <div>
-          <h1 className="text-t1">Get a starting setup</h1>
+          <h1 className="text-t1" tabIndex={-1} data-screen-heading>Get a starting setup</h1>
           <p className="mt-2 text-fg-secondary">Pick a port and a date to see which lures to run, how deep and how fast, and why.</p>
         </div>
         <label className="flex flex-col gap-1">
@@ -405,15 +426,16 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
       <form className="flex flex-1 flex-col gap-6" onSubmit={(e) => { e.preventDefault(); if (ready) setStep("result"); }}>
         {back("home")}
         <div>
-          <h1 className="text-t2">{portName}, {monthName(date)}</h1>
+          <h1 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h1>
           {c ? <div className="mt-1"><ConditionsSummary c={c} /></div> : null}
           {c?.messages.length ? <p className="mt-1 text-fg-secondary">{c.messages[0]}</p> : null}
         </div>
+        <p role="status" aria-live="polite" className="sr-only">{late.length ? `Added: ${late.map((f) => QUESTION_NAME[f]).join(", ")}` : ""}</p>
         {show("time_of_day") ? <Choice legend="Time on the water" value={time} onChange={setTime} options={[{ value: "before_sunrise", label: "Before sunrise" }, { value: "early", label: "First two hours" }, { value: "day", label: "Daytime" }, { value: "after_sunset", label: "After sunset" }]} /> : null}
-        {show("clarity") ? <Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} /> : null}
-        {show("sky") ? <Choice legend="Sky" hint="No forecast covers that time." value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} /> : null}
-        {show("wind") ? <Choice legend="Wind" hint="No forecast covers that time." value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} /> : null}
-        {show("mode") ? <Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /> : null}
+        {show("clarity") ? <div className={fade("clarity")}><Choice legend="Water clarity" value={clarity} onChange={setClarity} options={[{ value: "clear", label: "Clear" }, { value: "stained", label: "Stained" }, { value: "murky", label: "Murky" }, { value: "unknown", label: "Not sure" }]} /></div> : null}
+        {show("sky") ? <div className={fade("sky")}><Choice legend="Sky" hint={time === "before_sunrise" || time === "after_sunset" ? "Not used in the dark: light is low." : "No forecast covers that time."} value={sky} onChange={setSky} options={[{ value: "bright", label: "Bright" }, { value: "overcast", label: "Overcast" }, { value: "low_light", label: "Low light" }]} /></div> : null}
+        {show("wind") ? <div className={fade("wind")}><Choice legend="Wind" hint="No forecast covers that time." value={wind} onChange={setWind} options={[{ value: "calm", label: "Calm" }, { value: "breezy", label: "Breezy or more" }]} /></div> : null}
+        {show("mode") ? <div className={fade("mode")}><Choice legend="Where are you fishing" hint="In August some fish are still offshore and some are staging." value={mode} onChange={setMode} options={[{ value: "offshore", label: "Offshore" }, { value: "staging", label: "Near the river mouth" }]} /></div> : null}
         <div className="flex flex-col gap-2">
           <Choice
             legend="Depth"
@@ -461,10 +483,10 @@ export function Quiz({ ports }: { ports: { name: string; state: string }[] }) {
       {rec ? (
         <Result
           rec={rec} explanation={agentExplanation && agentExplanation.for === recKey ? agentExplanation.explanation : rec.explanation}
-          portName={portName} date={date} onConditions={() => setStep("conditions")}
+          portName={portName} date={date} modeAnswered={asked.includes("mode")} onConditions={() => setStep("conditions")}
           onTryDate={async (next) => {
             setDate(next);
-            setAsked([]);
+            resetAsked();
             const first = await ask(next);
             if (first && first.status !== "out_of_season") setStep("questions");
           }}
