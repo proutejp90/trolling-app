@@ -59,10 +59,23 @@ for (const [set, now] of Object.entries(SETS)) {
       } else { body = JSON.stringify({ type: "FeatureCollection", features: [] }); note = "NWS answers an empty collection for a window this old (checked live 2026-11-27)."; }
     } else if (f.key.startsWith("nws/grid/")) {
       const j = JSON.parse(body);
-      body = JSON.stringify({ properties: pick(j.properties, ["updateTime", "skyCover", "windSpeed", "windDirection", "hazards"]) });
-      note += " Cut to the four series the parser reads.";
+      body = JSON.stringify({ properties: pick(j.properties, ["updateTime", "skyCover", "windSpeed", "windDirection", "hazards", "probabilityOfPrecipitation", "temperature"]) });
+      note += " Cut to the series the parser reads.";
     } else if (f.key.startsWith("nws/points/")) {
-      body = JSON.stringify({ properties: pick(JSON.parse(body).properties, ["gridId", "gridX", "gridY", "forecastGridData", "observationStations", "timeZone"]) });
+      body = JSON.stringify({ properties: pick(JSON.parse(body).properties, ["gridId", "gridX", "gridY", "forecastGridData", "observationStations", "timeZone", "forecastZone"]) });
+    } else if (f.key.startsWith("nws/alerts/")) {
+      // Alerts and the marine forecast were recorded on 2026-11-28, a day after the rest.
+      if (set === "november") {
+        const j = JSON.parse(body);
+        body = JSON.stringify({ features: j.features.map((x) => ({ properties: pick(x.properties, ["event", "headline", "sent", "effective", "onset", "ends", "expires"]) })) });
+        note += " Cut to the fields the parser reads.";
+      } else { body = JSON.stringify({ features: [] }); note = "No alert on record for this clock: the empty collection the API gives when none is active."; }
+    } else if (f.key.startsWith("nws/nsh-list/")) {
+      if (set === "november") { body = JSON.stringify({ "@graph": JSON.parse(body)["@graph"].slice(0, 1).map((x) => pick(x, ["id", "issuanceTime"])) }); note += " Newest product only."; }
+      else { body = JSON.stringify({ "@graph": [] }); note = "No marine forecast on record for this clock, so the list is empty."; }
+    } else if (f.key.startsWith("nws/nsh/")) {
+      if (set !== "november") continue;
+      body = JSON.stringify(pick(JSON.parse(body), ["productText", "issuanceTime"]));
     } else if (f.key.startsWith("nws/stations/")) {
       const j = JSON.parse(body);
       body = JSON.stringify({ features: j.features.slice(0, 2).map((x) => ({ properties: pick(x.properties, ["stationIdentifier", "name"]), geometry: x.geometry })) });

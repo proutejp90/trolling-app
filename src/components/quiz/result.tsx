@@ -11,6 +11,7 @@ import { Card, CardHeader, Panel, Zone } from "@/components/ui/card";
 import { capBadges, conditionChips, dataAge } from "@/lib/chips";
 import { monthName } from "@/lib/format";
 import { nextSeasonStart } from "@/lib/home";
+import { AlertNotice } from "./conditions-view";
 import { caveatsToShow, FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
 
 const CONFIDENCE_ICON = { high: CircleCheck, medium: CircleAlert, low: CircleX } as const;
@@ -157,6 +158,8 @@ export function Result({ rec, explanation, writing, portName, date, modeAnswered
     <div className="flex flex-col gap-8">
       {/* Zone 1, the plan. No label: it is the top of the page. */}
       <div className="flex flex-col gap-3">
+        {/* An active alert for the port's zone, word for word, above everything else. */}
+        {c.forecast_panel.alerts.map((a) => <AlertNotice key={a.headline} alert={a} timeZone={c.forecast_panel.time_zone} />)}
         <div>
           <h1 className="text-t2" tabIndex={-1} data-screen-heading>{portName}, {monthName(date)}</h1>
           <p className="mt-1 text-fg-secondary">

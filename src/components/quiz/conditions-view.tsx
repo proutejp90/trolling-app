@@ -2,6 +2,7 @@
 
 import { Check, ChevronRight, Clock } from "lucide-react";
 import type { Conditions, StationReading } from "@/server/conditions";
+import type { ForecastPanel as Panel_ } from "@/server/forecast-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, Panel, Zone } from "@/components/ui/card";
 import { capBadges, isStale } from "@/lib/chips";
@@ -51,6 +52,107 @@ function StationRow({ r, staleHours, farther }: { r: StationReading; staleHours:
   );
 }
 
+const clock = (iso: string, timeZone: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+const hourOf = (iso: string, timeZone: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", timeZone });
+const dayAndTime = (iso: string, timeZone: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone });
+const minutesSince = (iso: string, now: string) => Math.max(0, Math.round((new Date(now).getTime() - new Date(iso).getTime()) / 60_000));
+
+/** An alert exactly as the National Weather Service issued it. No color here says safe or unsafe. */
+export function AlertNotice({ alert, timeZone }: { alert: Panel_["alerts"][number]; timeZone: string }) {
+  return (
+    <div className="rounded-md border border-border bg-surface-1 p-4">
+      <p className="font-medium text-fg">{alert.headline}</p>
+      <p className="mt-1 text-small text-fg-tertiary">
+        Issued {dayAndTime(alert.issued_at, timeZone)}{alert.ends_at ? `. In effect until ${dayAndTime(alert.ends_at, timeZone)}` : ""}. National Weather Service.
+      </p>
+      <a href={alert.url} target="_blank" rel="noreferrer" className="mt-1 inline-flex min-h-touch items-center text-accent-text underline underline-offset-2">Read the full text at weather.gov</a>
+    </div>
+  );
+}
+
+/** The trip day's weather as stored. It gives no advice and no rating of the day. */
+function ForecastPanel({ c }: { c: Conditions }) {
+  const p = c.forecast_panel, tz = p.time_zone;
+  const sun = c.sunrise && c.sunset ? `Sunrise ${clock(c.sunrise, tz)}. Sunset ${clock(c.sunset, tz)}.` : null;
+  const stale = p.stale || p.alerts_stale;
+  return (
+    <>
+      {p.alerts.map((a) => <AlertNotice key={a.headline} alert={a} timeZone={tz} />)}
+      <Card>
+        <div className="flex flex-col gap-2 border-b border-border-subtle p-4">
+          <p className="text-small text-fg-tertiary">
+            National Weather Service.
+            {p.fetched_at ? ` Forecast fetched ${ago(minutesSince(p.fetched_at, c.now))}.` : ""}
+            {p.is_today && p.alerts_fetched_at ? ` Alerts checked ${ago(minutesSince(p.alerts_fetched_at, c.now))}.` : ""}
+          </p>
+          {stale ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="warning" icon={Clock}>Stale</Badge>
+              <a href={p.more_url} target="_blank" rel="noreferrer" className="inline-flex min-h-touch items-center text-accent-text underline underline-offset-2">See the current forecast at weather.gov</a>
+            </div>
+          ) : null}
+          {sun ? <p className="text-fg-secondary tabular-nums">{sun}</p> : null}
+        </div>
+        {p.hours.length ? (
+          <table className="w-full text-small tabular-nums text-fg-secondary">
+            <caption className="sr-only">Forecast by hour</caption>
+            <thead>
+              <tr className="text-left text-fg-tertiary">
+                <th scope="col" className="py-2 pl-4 font-medium">Time</th>
+                <th scope="col" className="py-2 font-medium">Wind</th>
+                <th scope="col" className="py-2 font-medium">Sky</th>
+                <th scope="col" className="py-2 font-medium">Rain</th>
+                <th scope="col" className="py-2 pr-4 text-right font-medium">Air</th>
+              </tr>
+            </thead>
+            <tbody>
+              {p.hours.map((h) => (
+                <tr key={h.valid_at} className="border-t border-border-subtle">
+                  <th scope="row" className="py-2 pl-4 text-left font-normal">{hourOf(h.valid_at, tz)}</th>
+                  <td className="py-2">{h.wind_speed_mph === null ? "" : `${Math.round(h.wind_speed_mph)} mph${h.wind_dir_deg === null ? "" : ` ${COMPASS_SHORT[Math.round(h.wind_dir_deg / 45) % 8]}`}`}</td>
+                  <td className="py-2">{h.sky_cover_pct === null ? "" : `${Math.round(h.sky_cover_pct)}% cloud`}</td>
+                  <td className="py-2">{h.precip_pct === null ? "" : `${Math.round(h.precip_pct)}%`}</td>
+                  <td className="py-2 pr-4 text-right">{h.air_temp_f === null ? "" : `${h.air_temp_f} °F`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <p className="p-4 text-fg-secondary">No forecast covers that time.</p>}
+      </Card>
+      {p.observed_waves ? (
+        <Card className="p-4">
+          <h3 className="text-small text-fg-tertiary">Waves, observed</h3>
+          <p className="mt-1 text-fg-secondary tabular-nums">
+            {p.observed_waves.height_ft} ft{p.observed_waves.period_s !== null ? `, ${p.observed_waves.period_s} second period` : ""} at {p.observed_waves.station}, {ago(p.observed_waves.age_minutes)}.
+          </p>
+        </Card>
+      ) : null}
+      {p.marine ? (
+        <Card className="p-4">
+          <h3 className="text-small text-fg-tertiary">Nearshore marine forecast{p.marine.issued_at ? `, issued ${dayAndTime(p.marine.issued_at, tz)}` : ""}</h3>
+          <div className="mt-2 flex flex-col gap-2 text-fg-secondary">{marineParagraphs(p.marine.text).map((para) => <p key={para}>{para}</p>)}</div>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+/**
+ * The product is typed in 69-column lines, which wrap badly on a phone. The words are left
+ * exactly as issued; only the line breaks inside a paragraph are removed. A new paragraph
+ * starts at a blank line or at a line that opens with a period (".TONIGHT...").
+ */
+export function marineParagraphs(text: string): string[] {
+  const out: string[] = [];
+  let fresh = true;
+  for (const line of text.split("\n").map((l) => l.trim())) {
+    if (!line) { fresh = true; continue; }
+    if (fresh || line.startsWith(".")) out.push(line); else out[out.length - 1] += ` ${line}`;
+    fresh = false;
+  }
+  return out;
+}
+const COMPASS_SHORT = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
 /** The raw inputs, grouped by what was measured: water, wind, forecast. */
 export function ConditionsView({ c }: { c: Conditions }) {
   const near = c.readings.filter((r) => r.in_range), far = c.readings.filter((r) => !r.in_range);
@@ -59,13 +161,6 @@ export function ConditionsView({ c }: { c: Conditions }) {
   const rows = (list: StationReading[], farther: boolean) => (
     <Card><ul>{list.map((r) => <StationRow key={`${r.source}/${r.station}`} r={r} staleHours={c.limits.stale_hours} farther={farther} />)}</ul></Card>
   );
-  const forecast = c.forecast
-    ? [
-        c.forecast.sky_cover_pct !== null ? `Sky cover ${c.forecast.sky_cover_pct}%` : null,
-        c.forecast.wind_speed_mph !== null ? `Wind ${c.forecast.wind_speed_mph} mph${c.forecast.wind_dir_deg !== null ? ` from the ${compass(c.forecast.wind_dir_deg)}` : ""}` : null,
-        c.forecast.hazards.length ? `Marine hazard in effect: ${c.forecast.hazards.map((h) => `${h.phenomenon}.${h.significance}`).join(", ")}` : null,
-      ].filter(Boolean).join(" · ")
-    : "No forecast covers that time.";
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-3">
@@ -85,7 +180,7 @@ export function ConditionsView({ c }: { c: Conditions }) {
         </Card>
       </Zone>
       <Zone label="Forecast">
-        <Card className="p-4"><p className="text-fg-secondary tabular-nums">{forecast}</p></Card>
+        <ForecastPanel c={c} />
       </Zone>
       <div className="flex flex-col gap-3">
         {far.length ? (
