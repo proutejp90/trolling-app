@@ -210,6 +210,16 @@ Source: `docs/UI-REVIEW-FIXES.md`.
 - **Tag chips are an on-water departure from Meridian.** Meridian says badges are not buttons. A tag chip is a button that draws a badge inside it, so the badge itself stays a badge. Tag buttons are 44px tall with the badge centered inside, and the reason text is centered against them. The sentence opens under the reason; one tag's sentence shows at a time per reason. "If nothing bites" tips use the same tappable tags.
 - **Wide screens** means Tailwind's `md` breakpoint, 768px.
 
+## UI review fixes, Part D
+
+- **Why "Wind, last 48 hours" was empty (D4).** The cache was not short. On 2026-11-28 the Muskegon Coast Guard station, the GLOS feed for the same place, the GLOS Muskegon buoy feed and the airport each had 47 or 48 hourly wind readings in the last 48 hours, and the refresh job keeps 72 hours. The review looked at April 1 and July 15, months away, and for a trip more than `trip_max_days_ahead` away the app deliberately gives the engine no wind history. The screen reused that empty list and said "Too little wind history to say", which was wrong. The 24-hour bar is unchanged.
+- **What the wind line says now.** With a day or more of readings: "[station]: [n] of [h] hours from the north or east." For a trip too far off to use them it adds "Not used for this trip: it is [n] days away." With less than a day: "Wind history needs a day of readings. [n] hours so far."
+- **Merging stations (D1)** uses each station's own position: feeds within 0.1 mile of each other become one row. It applies to the Conditions list only. The engine's inputs (water temperature source, wind history) still read each feed on its own, and a test checks that merging changes nothing else.
+- **In a merged row** the name comes from the NDBC feed when there is one, then GLOS, then NWS. Water, waves and air each show the newest value any feed has. Wind speed and direction are taken together from the newest feed that reported wind. The row's age is the newest feed's. Sources read "NDBC", "GLOS" (the Seagull feed) and "NWS".
+- **"In range" (D2)** is `station_max_miles` from the thresholds, not a number in the screen.
+- **Reading ages (D3).** `ago()` moved to `src/lib/format.ts`. Under a minute reads "just now". Hours run up to 36, then days, as before, so the smallest day count is 2 and "1 day ago" cannot occur with today's cut-over; the singular is in place and tested for when it can.
+- **Known and unchanged:** a trip date in the past still reads as "[n] days away".
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).

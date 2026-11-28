@@ -5,6 +5,8 @@
  */
 import type { EngineContext, Threshold } from "@recommender/engine";
 import type { Queryable } from "./db";
+import { distanceMi } from "../../seed/geo";
+import type { Wind48h } from "../lib/format";
 import { sunTimes } from "./sun";
 import { cToF, msToMph, mToFt, round } from "./units";
 
@@ -12,6 +14,10 @@ export type TimeOfDay = "before_sunrise" | "early" | "day" | "after_sunset";
 
 export interface StationReading {
   station: string; source: string; distance_mi: number; observed_at: string; age_minutes: number;
+  /** Every feed merged into this row, as the names an angler sees: NDBC, GLOS, NWS. */
+  sources: string[];
+  /** Within the distance the app reads stations from. */
+  in_range: boolean;
   water_temp_f: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; wave_height_ft: number | null; air_temp_f: number | null;
   temp_profile: { depth_ft: number; temp_f: number }[] | null;
 }
@@ -30,6 +36,10 @@ export interface Conditions {
   stale: boolean;
   wind_history: { hours_ago: number; dir_deg: number }[];
   wind_station: string | null;
+  /** The last 48 hours of wind as the Conditions screen describes them, whether or not the engine used them. */
+  wind_48h: Wind48h;
+  /** Whole days from now to the trip date. */
+  days_to_trip: number;
   forecast: { valid_at: string; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; hazards: { phenomenon: string; significance: string }[] } | null;
   /** True when a cached forecast hour falls near any of the four times of day on the trip date. */
   forecast_covers_date: boolean;
@@ -50,6 +60,8 @@ export interface ObservationRow {
   station_name: string; source: string; distance_mi: number; rank: number; observed_at: Date;
   wind_dir_deg: number | null; wind_speed_ms: number | null; wave_height_m: number | null; air_temp_c: number | null; water_temp_c: number | null;
   temp_profile: { depth_m: number; temp_c: number }[] | null;
+  /** The station's own position. Rows without one are never merged. */
+  lat?: number; lon?: number;
 }
 export interface ForecastRow { valid_at: Date; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_ms: number | null; hazards: { phenomenon: string; significance: string }[] }
 
@@ -112,13 +124,32 @@ export function buildConditions(input: {
   }
   const latest = [...latestBy.values()].sort((a, b) => a.distance_mi - b.distance_mi);
   const toFeet = (p: ObservationRow["temp_profile"]) => p?.map((x) => ({ depth_ft: Math.round(mToFt(x.depth_m)), temp_f: round(cToF(x.temp_c)) })) ?? null;
-  const readings: StationReading[] = latest.map((o) => ({
-    station: o.station_name, source: o.source, distance_mi: Number(o.distance_mi), observed_at: o.observed_at.toISOString(), age_minutes: ageMin(o.observed_at),
-    water_temp_f: o.water_temp_c === null ? null : round(cToF(o.water_temp_c)),
-    wind_dir_deg: o.wind_dir_deg, wind_speed_mph: o.wind_speed_ms === null ? null : round(msToMph(o.wind_speed_ms)),
-    wave_height_ft: o.wave_height_m === null ? null : round(mToFt(o.wave_height_m)), air_temp_f: o.air_temp_c === null ? null : round(cToF(o.air_temp_c)),
-    temp_profile: toFeet(o.temp_profile),
-  }));
+  // One row per physical station: feeds within a tenth of a mile of each other are the same instrument
+  // reported by two networks. Only this list is merged; the engine's inputs below read the feeds as before.
+  const SOURCE_ORDER = ["ndbc", "seagull", "nws"], SOURCE_NAME: Record<string, string> = { ndbc: "NDBC", seagull: "GLOS", nws: "NWS" };
+  const places: ObservationRow[][] = [];
+  for (const o of latest) {
+    const same = places.find((g) => g.some((m) => o.lat !== undefined && o.lon !== undefined && m.lat !== undefined && m.lon !== undefined && distanceMi(o.lat, o.lon, m.lat, m.lon) <= 0.1));
+    if (same) same.push(o); else places.push([o]);
+  }
+  const readings: StationReading[] = places.map((group) => {
+    const bySource = [...group].sort((a, b) => SOURCE_ORDER.indexOf(a.source) - SOURCE_ORDER.indexOf(b.source));
+    const newestFirst = [...group].sort((a, b) => b.observed_at.getTime() - a.observed_at.getTime());
+    const newest = <K extends keyof ObservationRow>(field: K) => newestFirst.find((m) => m[field] !== null && m[field] !== undefined)?.[field] ?? null;
+    const named = bySource[0]!, windFrom = newestFirst.find((m) => m.wind_speed_ms !== null || m.wind_dir_deg !== null);
+    const water = newest("water_temp_c"), waves = newest("wave_height_m"), air = newest("air_temp_c");
+    const distance = Math.min(...group.map((m) => Number(m.distance_mi)));
+    return {
+      station: named.station_name, source: named.source, sources: [...new Set(bySource.map((m) => SOURCE_NAME[m.source] ?? m.source))],
+      distance_mi: distance, in_range: distance <= maxMiles,
+      observed_at: newestFirst[0]!.observed_at.toISOString(), age_minutes: ageMin(newestFirst[0]!.observed_at),
+      water_temp_f: water === null ? null : round(cToF(water)),
+      // Direction and speed stay a pair: both come from the newest feed that reported wind.
+      wind_dir_deg: windFrom?.wind_dir_deg ?? null, wind_speed_mph: windFrom?.wind_speed_ms == null ? null : round(msToMph(windFrom.wind_speed_ms)),
+      wave_height_ft: waves === null ? null : round(mToFt(waves)), air_temp_f: air === null ? null : round(cToF(air)),
+      temp_profile: toFeet(newestFirst.find((m) => (m.temp_profile?.length ?? 0) >= 3)?.temp_profile ?? null),
+    };
+  });
 
   // --- Water temperature: the fallback ladder, levels 1 and 2 ---
   const daysOut = Math.abs(new Date(`${date}T12:00:00Z`).getTime() - now.getTime()) / 86_400_000;
@@ -163,8 +194,14 @@ export function buildConditions(input: {
   });
   // Nearest station with most of the window covered; failing that, the best coverage there is.
   const chosen = histories.filter((h) => h.history.length >= 36).sort((a, b) => a.distance - b.distance)[0] ?? histories.filter((h) => h.history.length >= 24).sort((a, b) => b.history.length - a.history.length)[0];
+  const northEast = (h: Conditions["wind_history"]) => h.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
+  const tripIsFar = daysOut > maxDaysOut + 0.5;
+  const best = [...histories].sort((a, b) => b.history.length - a.history.length)[0];
+  const wind48h: Wind48h = chosen
+    ? { station: chosen.name, hours: chosen.history.length, north_east_hours: northEast(chosen.history), enough: true, used: !tripIsFar }
+    : { station: best?.name ?? null, hours: best?.history.length ?? 0, north_east_hours: null, enough: false, used: false };
   // The last 48 hours of wind say nothing about the water on a trip weeks away.
-  if (daysOut > maxDaysOut + 0.5) { /* no wind history for a distant trip */ }
+  if (tripIsFar) { /* no wind history for a distant trip */ }
   else if (chosen) { windHistory = chosen.history; windStation = chosen.name; }
   else if (input.connected) messages.push("There is too little wind history to check for an upwelling.");
 
@@ -193,7 +230,7 @@ export function buildConditions(input: {
     temp_station: source ? { name: source.station_name, source: source.source, distance_mi: Number(source.distance_mi) } : null,
     observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : null,
     stale: source ? !fresh(source) : false,
-    wind_history: windHistory, wind_station: windStation, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
+    wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: Math.round(daysOut), forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
     light_period: light, hours_after_sunrise: hoursAfterSunrise, sunrise: sun?.sunrise.toISOString() ?? null, sunset: sun?.sunset.toISOString() ?? null,
     messages, readings,
   };
@@ -203,7 +240,7 @@ export function buildConditions(input: {
 export async function loadConditions(q: Queryable, port: PortRow, date: string, timeOfDay: TimeOfDay | null, now: Date, thresholds: Threshold[]): Promise<Conditions> {
   const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const obs = await q.query(
-    `select s.name as station_name, s.source, ps.distance_mi, ps.rank, o.observed_at, o.wind_dir_deg, o.wind_speed_ms, o.wave_height_m, o.air_temp_c, o.water_temp_c, o.temp_profile
+    `select s.name as station_name, s.source, s.lat, s.lon, ps.distance_mi, ps.rank, o.observed_at, o.wind_dir_deg, o.wind_speed_ms, o.wave_height_m, o.air_temp_c, o.water_temp_c, o.temp_profile
      from public.port_stations ps
      join public.stations s on s.id = ps.station_id
      join public.observations o on o.station_id = s.id
@@ -221,7 +258,7 @@ export async function loadConditions(q: Queryable, port: PortRow, date: string, 
   );
   return buildConditions({
     port, date, timeOfDay, now, thresholds, connected: true, buoysInRange: linked.rows[0].n,
-    observations: obs.rows.map((r) => ({ ...r, distance_mi: Number(r.distance_mi), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms), wave_height_m: n(r.wave_height_m), air_temp_c: n(r.air_temp_c), water_temp_c: n(r.water_temp_c) })),
+    observations: obs.rows.map((r) => ({ ...r, lat: Number(r.lat), lon: Number(r.lon), distance_mi: Number(r.distance_mi), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms), wave_height_m: n(r.wave_height_m), air_temp_c: n(r.air_temp_c), water_temp_c: n(r.water_temp_c) })),
     forecasts: fc.rows.map((r) => ({ ...r, sky_cover_pct: n(r.sky_cover_pct), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms) })),
   });
 }

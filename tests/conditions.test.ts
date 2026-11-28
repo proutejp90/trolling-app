@@ -164,3 +164,75 @@ describe("forecast, sky and light", () => {
     expect(build([], { timeOfDay: null })).toMatchObject({ trip_time: null, light_period: null, hours_after_sunrise: null });
   });
 });
+
+describe("the Conditions screen's station list", () => {
+  // Two feeds for one physical station, a few metres apart, as at the Muskegon Coast Guard station.
+  const cg = { lat: 43.2270, lon: -86.3390 }, cgAgain = { lat: 43.2271, lon: -86.3391 };
+
+  it("merges two sources for one station into one row with the newest reading for each field", () => {
+    const c = build([
+      obs({ station_name: "MKGM4 Muskegon", source: "seagull", distance_mi: 0.1, ...cgAgain, observed_at: hoursAgo(0.5), wind_dir_deg: 200, wind_speed_ms: 5 }),
+      obs({ station_name: "Muskegon CG Station, Muskegon, MI", source: "ndbc", distance_mi: 0.1, ...cg, observed_at: hoursAgo(1), wind_dir_deg: 180, wind_speed_ms: 4, air_temp_c: 10 }),
+      obs({ station_name: "Muskegon County Airport", source: "nws", distance_mi: 6.5, lat: 43.17, lon: -86.24, observed_at: hoursAgo(1), air_temp_c: 12 }),
+    ]);
+    expect(c.readings).toHaveLength(2);
+    expect(c.readings[0]).toMatchObject({
+      station: "Muskegon CG Station, Muskegon, MI", // named after the NDBC station
+      sources: ["NDBC", "GLOS"], distance_mi: 0.1, age_minutes: 30,
+      wind_dir_deg: 200, wind_speed_mph: 11.2, // the newer feed's wind
+      air_temp_f: 50, // only the older feed has air temperature
+    });
+    expect(c.readings[1]).toMatchObject({ station: "Muskegon County Airport", sources: ["NWS"] });
+  });
+
+  it("keeps stations apart when they are more than a tenth of a mile from each other, or have no position", () => {
+    const apart = build([
+      obs({ station_name: "A", source: "ndbc", distance_mi: 3.1, lat: 43.2, lon: -86.4, observed_at: hoursAgo(1), water_temp_c: 10 }),
+      obs({ station_name: "B", source: "seagull", distance_mi: 3.1, lat: 43.2, lon: -86.397, observed_at: hoursAgo(1), water_temp_c: 11 }),
+    ]);
+    expect(apart.readings.map((r) => r.station)).toEqual(["A", "B"]);
+    const noPosition = build([
+      obs({ station_name: "A", source: "ndbc", distance_mi: 3.1, observed_at: hoursAgo(1), water_temp_c: 10 }),
+      obs({ station_name: "B", source: "seagull", distance_mi: 3.1, observed_at: hoursAgo(1), water_temp_c: 11 }),
+    ]);
+    expect(noPosition.readings).toHaveLength(2);
+  });
+
+  it("marks which stations are within the distance the app uses", () => {
+    const c = build([
+      obs({ station_name: "Near", distance_mi: 25, observed_at: hoursAgo(1), water_temp_c: 10 }),
+      obs({ station_name: "Far", distance_mi: 25.1, observed_at: hoursAgo(1), water_temp_c: 10 }),
+    ]);
+    expect(c.readings.map((r) => [r.station, r.in_range])).toEqual([["Near", true], ["Far", false]]);
+  });
+
+  it("merging rows does not change what the engine reads", () => {
+    const rows = [
+      obs({ station_name: "Muskegon", source: "seagull", distance_mi: 3.1, lat: 43.18, lon: -86.34, observed_at: hoursAgo(0.5), water_temp_c: 14 }),
+      obs({ station_name: "Muskegon Buoy, MI", source: "ndbc", distance_mi: 3.1, lat: 43.18, lon: -86.34, observed_at: hoursAgo(1), water_temp_c: 15 }),
+    ];
+    const withPosition = build(rows), without = build(rows.map((r) => ({ ...r, lat: undefined, lon: undefined })));
+    expect(withPosition.readings).toHaveLength(1);
+    expect({ ...withPosition, readings: null }).toEqual({ ...without, readings: null });
+  });
+});
+
+const windRows = (station: string, source: string, distance: number, hours: number, dir: number) =>
+  Array.from({ length: hours }, (_, i) => obs({ observed_at: hoursAgo(i + 0.5), wind_dir_deg: dir, wind_speed_ms: 5, station_name: station, source, distance_mi: distance }));
+
+describe("what the Conditions screen says about wind history", () => {
+  it("counts the hours when a station covers the window", () => {
+    const c = build(windRows("Muskegon Buoy", "ndbc", 3.5, 48, 20));
+    expect(c.wind_48h).toEqual({ station: "Muskegon Buoy", hours: 48, north_east_hours: 48, enough: true, used: true });
+  });
+  it("still shows the wind for a trip weeks away, and says it is not used", () => {
+    const c = build(windRows("Muskegon Buoy", "ndbc", 3.5, 48, 200), { date: "2026-08-20" });
+    expect(c.wind_48h).toEqual({ station: "Muskegon Buoy", hours: 48, north_east_hours: 0, enough: true, used: false });
+    expect(c.days_to_trip).toBe(36);
+    expect(c.wind_history).toEqual([]); // the engine still gets none
+  });
+  it("says how many hours there are when it is short of a day", () => {
+    expect(build(windRows("Muskegon Buoy", "ndbc", 3.5, 6, 20)).wind_48h).toEqual({ station: "Muskegon Buoy", hours: 6, north_east_hours: null, enough: false, used: false });
+    expect(build([]).wind_48h).toEqual({ station: null, hours: 0, north_east_hours: null, enough: false, used: false });
+  });
+});
