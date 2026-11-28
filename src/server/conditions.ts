@@ -18,6 +18,8 @@ export interface StationReading {
   sources: string[];
   /** Within the distance the app reads stations from. */
   in_range: boolean;
+  /** What the engine read from this station for this trip, if anything. */
+  used_for: ("water" | "wind")[];
   water_temp_f: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; wave_height_ft: number | null; air_temp_f: number | null;
   temp_profile: { depth_ft: number; temp_f: number }[] | null;
 }
@@ -40,6 +42,8 @@ export interface Conditions {
   wind_48h: Wind48h;
   /** Whole days from now to the trip date. */
   days_to_trip: number;
+  /** The freshness thresholds, in hours, so the screens never carry their own numbers. */
+  limits: { fresh_hours: number; stale_hours: number; max_miles: number };
   forecast: { valid_at: string; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_mph: number | null; hazards: { phenomenon: string; significance: string }[] } | null;
   /** True when a cached forecast hour falls near any of the four times of day on the trip date. */
   forecast_covers_date: boolean;
@@ -141,7 +145,7 @@ export function buildConditions(input: {
     const distance = Math.min(...group.map((m) => Number(m.distance_mi)));
     return {
       station: named.station_name, source: named.source, sources: [...new Set(bySource.map((m) => SOURCE_NAME[m.source] ?? m.source))],
-      distance_mi: distance, in_range: distance <= maxMiles,
+      distance_mi: distance, in_range: distance <= maxMiles, used_for: [],
       observed_at: newestFirst[0]!.observed_at.toISOString(), age_minutes: ageMin(newestFirst[0]!.observed_at),
       water_temp_f: water === null ? null : round(cToF(water)),
       // Direction and speed stay a pair: both come from the newest feed that reported wind.
@@ -190,7 +194,7 @@ export function buildConditions(input: {
       const h = Math.max(1, Math.ceil(ageMin(r.observed_at) / 60));
       hours.set(h, [...(hours.get(h) ?? []), Number(r.wind_dir_deg)]);
     }
-    return { name: rows[0]!.station_name, distance: Number(rows[0]!.distance_mi), history: [...hours.entries()].map(([hours_ago, d]) => ({ hours_ago, dir_deg: meanDirection(d) })).sort((a, b) => a.hours_ago - b.hours_ago) };
+    return { key: `${rows[0]!.source}/${rows[0]!.station_name}`, name: rows[0]!.station_name, distance: Number(rows[0]!.distance_mi), history: [...hours.entries()].map(([hours_ago, d]) => ({ hours_ago, dir_deg: meanDirection(d) })).sort((a, b) => a.hours_ago - b.hours_ago) };
   });
   // Nearest station with most of the window covered; failing that, the best coverage there is.
   const chosen = histories.filter((h) => h.history.length >= 36).sort((a, b) => a.distance - b.distance)[0] ?? histories.filter((h) => h.history.length >= 24).sort((a, b) => b.history.length - a.history.length)[0];
@@ -204,6 +208,14 @@ export function buildConditions(input: {
   if (tripIsFar) { /* no wind history for a distant trip */ }
   else if (chosen) { windHistory = chosen.history; windStation = chosen.name; }
   else if (input.connected) messages.push("There is too little wind history to check for an upwelling.");
+
+  // Mark the rows the engine read, so the Conditions screen can say which stations counted.
+  const waterKey = source ? `${source.source}/${source.station_name}` : null, windKey = chosen && !tripIsFar ? chosen.key : null;
+  places.forEach((group, i) => {
+    const keys = group.map((m) => `${m.source}/${m.station_name}`);
+    if (waterKey && keys.includes(waterKey)) readings[i]!.used_for.push("water");
+    if (windKey && keys.includes(windKey)) readings[i]!.used_for.push("wind");
+  });
 
   // --- Forecast at the trip time ---
   let forecast: Conditions["forecast"] = null, sky: Conditions["sky"] = null, windCalm: boolean | null = null;
@@ -230,7 +242,7 @@ export function buildConditions(input: {
     temp_station: source ? { name: source.station_name, source: source.source, distance_mi: Number(source.distance_mi) } : null,
     observations_at: source?.observed_at.toISOString() ?? null, age_minutes: source ? ageMin(source.observed_at) : null,
     stale: source ? !fresh(source) : false,
-    wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: Math.round(daysOut), forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
+    wind_history: windHistory, wind_station: windStation, wind_48h: wind48h, days_to_trip: Math.round(daysOut), limits: { fresh_hours: num(thresholds, "obs_fresh_hours", 3), stale_hours: staleHours, max_miles: maxMiles }, forecast, forecast_covers_date: forecastCoversDate, sky, wind_calm: windCalm,
     light_period: light, hours_after_sunrise: hoursAfterSunrise, sunrise: sun?.sunrise.toISOString() ?? null, sunset: sun?.sunset.toISOString() ?? null,
     messages, readings,
   };

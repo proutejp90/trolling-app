@@ -220,6 +220,25 @@ Source: `docs/UI-REVIEW-FIXES.md`.
 - **Reading ages (D3).** `ago()` moved to `src/lib/format.ts`. Under a minute reads "just now". Hours run up to 36, then days, as before, so the smallest day count is 2 and "1 day ago" cannot occur with today's cut-over; the singular is in place and tested for when it can.
 - **Known and unchanged:** a trip date in the past still reads as "[n] days away".
 
+## UI review fixes, Part E
+
+Where the doc's own parts pull against each other, and what was chosen:
+
+- **Condition chips replace the "Depth from month defaults · Sky from your answer" line (E4 against E6 and C1).** The chips say the same thing with a word and a dot. Showing both would state each source twice, and C1 asks for the depth source once. The depth source now reads in the confidence reason as a sentence and in one chip ("Depth · month default").
+- **Condition chips wrap; other badge rows cap at three (E6).** The doc asks for one wrapping row of condition chips and also for at most three badges in a row. The cap is applied where Meridian means it, on list rows: finish rows and station rows collapse the rest into "+2".
+- **The check on a chosen option sits inside the radio dot, not beside it (E6 against A2).** Beside it, longer labels ("Breezy or more", "Use the default") wrap to two lines when chosen and the form below moves, which A2 forbids.
+- **The progress bar is hidden, not removed, when every group is done**, so Show setup does not move (A2).
+- **Freshness limits.** The data-age chip is success up to `obs_fresh_hours` (3) and warning past it. The "Stale" badge on a station row uses `obs_stale_hours` (6), the threshold whose description is "show the stale state". Both reach the screen in `conditions.limits`; no component carries a number.
+- **Question groups.** A question still needs an answer while the server lists it, so "On the water" counts only what the engine needs. The "On the water" card shows only when one of its questions is asked, so the progress bar has two segments on dates where a forecast answers sky and wind and clarity changes nothing. The Depth card's question is labeled "What you know", since the card is already titled Depth.
+- **Key numbers** are drawn with the figures at `title-1` and the unit in `small` beside them ("2.4 to 3.0 mph"). At full title size the unit wraps under the figures in a two-column row at 390px.
+- **Reason tags** sit in an 80px column. A reason with two tags stacks them.
+- **"Left out"** is not in the doc's four zones. It sits at the end of the spread zone as a muted panel, since it explains what is missing from the spread.
+- **Conditions zones.** In-range stations with water temperature or waves are under Water (with their wind on the same row); in-range stations with wind only are under Wind. In-range stations reporting neither are not listed. "Used for water / wind" comes from the server (`used_for`), and for a trip too far off to use live data no station is marked. "Not used" shows only on the farther stations, as the doc lists it.
+- **Finish traits** come from the catalog: "Glow" and "UV" from the finish's types, "House brand" from the lure. **The shop link on house-brand rows is not built**: the catalog has no shop URLs yet.
+- **"Your log" tag chip** has no reasons to attach to until Phase 5b.
+- **Zone labels** are `h2` in `micro`; card titles under them are `h3`. On the questions screen the three cards are the zones, so their titles are `h2` at `title-3`.
+- **Screenshots** are in `docs/ui-review/part-e`, made by `scripts/screenshots.mjs` on the autumn fixtures. Contrast is checked by `scripts/contrast.mjs`.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).
