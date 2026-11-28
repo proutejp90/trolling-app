@@ -158,12 +158,12 @@ export { explainInput };
 export async function explainRecommendation(
   raw: z.input<typeof explainInput>,
   deps: { db: Queryable | null; now: Date; call?: ModelCall | null; model?: string | null },
-): Promise<{ explanation: Explanation; cached: boolean; attempts: number }> {
+): Promise<{ explanation: Explanation; cached: boolean; attempts: number; rejections: string[][] }> {
   const { recommendation_id, ...input } = explainInput.parse(raw);
   const rec = await recommend(input, { db: deps.db, now: deps.now, store: false });
   const call = deps.call === undefined ? (agentConfigured() ? callModel : null) : deps.call;
   const model = deps.model === undefined ? (agentConfigured() ? agentModel() : null) : deps.model;
-  if (rec.status !== "ok" || !call) return { explanation: rec.explanation, cached: false, attempts: 0 };
+  if (rec.status !== "ok" || !call) return { explanation: rec.explanation, cached: false, attempts: 0, rejections: [] };
 
   const key = cacheKey(input, deps.now);
   if (deps.db) {
@@ -173,7 +173,7 @@ export async function explainRecommendation(
        order by created_at desc limit 1`,
       [key, new Date(deps.now.getTime() - 30 * 60_000)],
     );
-    if (hit.rows[0]) return { explanation: hit.rows[0].agent_output as Explanation, cached: true, attempts: 0 };
+    if (hit.rows[0]) return { explanation: hit.rows[0].agent_output as Explanation, cached: true, attempts: 0, rejections: [] };
   }
 
   const result = await explain(
@@ -189,5 +189,6 @@ export async function explainRecommendation(
       [recommendation_id, fromAgent ? JSON.stringify(result.explanation) : null, !fromAgent, model, result.explanation.prompt_version, result.latency_ms, key],
     );
   }
-  return { explanation: result.explanation, cached: false, attempts: result.attempts };
+  // Why answers were rejected is returned for diagnosis. It holds check messages only, never the model's text.
+  return { explanation: result.explanation, cached: false, attempts: result.attempts, rejections: result.rejections };
 }

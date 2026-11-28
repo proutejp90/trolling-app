@@ -31,7 +31,7 @@ const words = (text: string) => text.toLowerCase().match(/[a-z]+/g) ?? [];
 const numbers = (text: string) => (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
 
 /** Every number the agent may state: only what the engine and the cached conditions produced. */
-export function allowedNumbers(engine: EngineResult, conditions: Conditions, date: string, reports: ReportRow[]): Set<number> {
+export function allowedNumbers(engine: EngineResult, conditions: Conditions, date: string, reports: ReportRow[], alsoFrom: string[] = []): Set<number> {
   const out = new Set<number>();
   const add = (...ns: (number | null | undefined)[]) => ns.forEach((n) => { if (typeof n === "number" && Number.isFinite(n)) { out.add(n); out.add(Math.round(n)); } });
   add(engine.depth_ft?.min, engine.depth_ft?.max, engine.water_depth_ft?.min, engine.water_depth_ft?.max);
@@ -47,6 +47,8 @@ export function allowedNumbers(engine: EngineResult, conditions: Conditions, dat
   add(conditions.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length);
   for (const p of conditions.temp_profile ?? []) add(p.depth_ft, p.temp_f);
   add(Number(date.slice(8, 10)), Number(date.slice(0, 4)));
+  // Numbers in sentences the server itself wrote and handed to the agent may be repeated.
+  for (const text of [...conditions.messages, ...engine.notes, ...engine.dropped_types.map((d) => d.reason), ...alsoFrom]) for (const n of numbers(text)) add(n);
   for (const r of reports) {
     add(r.water_depth_min_ft, r.water_depth_max_ft, r.lure_depth_min_ft, r.lure_depth_max_ft, r.water_temp_f, r.break_depth_ft);
     add(Number(r.report_date.slice(8, 10)), Number(r.report_date.slice(0, 4)));
@@ -56,11 +58,11 @@ export function allowedNumbers(engine: EngineResult, conditions: Conditions, dat
 
 export interface CheckResult { ok: boolean; problems: string[] }
 
-export function checkAgentOutput(out: AgentOutput, engine: EngineResult, conditions: Conditions, date: string, reports: ReportRow[]): CheckResult {
+export function checkAgentOutput(out: AgentOutput, engine: EngineResult, conditions: Conditions, date: string, reports: ReportRow[], alsoFrom: string[] = []): CheckResult {
   const problems: string[] = [];
   const fired = new Set(engine.fired.map((f) => f.code));
   const types = groupsOf(engine);
-  const okNumbers = allowedNumbers(engine, conditions, date, reports);
+  const okNumbers = allowedNumbers(engine, conditions, date, reports, alsoFrom);
   const spreadWords = new Set(engine.setups.flatMap((s) => words(`${TYPE_NAME[s.lure_type]} ${s.lure_name} ${s.finish_name} ${s.attractor_name ?? ""} ${s.attractor_finish_name ?? ""}`)));
   const droppedWords = new Set(engine.dropped_types.flatMap((d) => words(TYPE_NAME[d.lure_type])));
   const reportWords = new Set(reports.flatMap((r) => words([...r.lures, ...r.colors].join(" "))));

@@ -45,7 +45,7 @@ export async function explain(input: ExplainInput, deps: { call: ModelCall | nul
       const raw = await deps.call({ system: SYSTEM_PROMPT, user, retryNote, previous, signal: controller.signal });
       const parsed = agentOutput.safeParse(raw);
       const problems = parsed.success
-        ? checkAgentOutput(parsed.data, input.engine, input.conditions, input.date, reports).problems
+        ? checkAgentOutput(parsed.data, input.engine, input.conditions, input.date, reports, [input.confidenceReason]).problems
         : parsed.error.issues.map((i) => `schema: ${i.path.join(".")} ${i.message}`);
       if (parsed.success && problems.length === 0) {
         return done(assemble(parsed.data, input.engine, { prompt_version: PROMPT_VERSION, model: deps.model }), attempt, rejections, parsed.data);
@@ -55,9 +55,12 @@ export async function explain(input: ExplainInput, deps: { call: ModelCall | nul
       retryNote = `Your last answer was rejected by the server's checks. Fix exactly these problems and answer again:\n- ${problems.slice(0, 12).join("\n- ")}`;
     }
   } catch (err) {
-    rejections.push([`call failed: ${err instanceof Error ? err.name : "error"}`]);
+    // Status and error type only: an API error message can echo request details.
+    const status = typeof (err as { status?: unknown }).status === "number" ? ` (HTTP ${(err as { status: number }).status})` : "";
+    rejections.push([`call failed: ${err instanceof Error ? err.name : "error"}${status}`]);
   } finally {
     clearTimeout(timer);
   }
+  if (rejections.length) console.warn("agent explanation rejected", JSON.stringify(rejections));
   return done(fallback, rejections.length, rejections, null);
 }

@@ -60,7 +60,15 @@ describe("server-side checks", () => {
     expect(check(edit((o) => { o.groups[0]!.reasons[0]!.text = "The range runs 55 to 90 ft down, from August reports."; })).ok).toBe(false);
     const allowed = allowedNumbers(engine, conditions, date, []);
     for (const n of [50, 90, 2, 2.2, 4, 300, 23, 8, 15, 2026]) expect(allowed.has(n), String(n)).toBe(true);
-    for (const n of [120, 3, 2.4, 45, 55]) expect(allowed.has(n), String(n)).toBe(false);
+    for (const n of [120, 45, 55, 7]) expect(allowed.has(n), String(n)).toBe(false);
+    for (const n of [2.4, 3]) expect(allowed.has(n), String(n)).toBe(true); // from the engine's own sentence on why spoons were left out
+  });
+
+  it("lets the agent repeat numbers from sentences the server wrote", () => {
+    const far = { ...conditions, messages: ["Buoy readings describe the water now, not 104 days away. Results use month defaults."] };
+    const o = edit((x) => { x.conditions_summary = "Buoy readings describe the water now, not 104 days away."; });
+    expect(checkAgentOutput(o, engine, far, date, []).ok).toBe(true);
+    expect(checkAgentOutput(o, engine, conditions, date, []).ok).toBe(false);
   });
 
   it("rejects a lure type the spread does not carry, but lets a cited rule's own words through", () => {

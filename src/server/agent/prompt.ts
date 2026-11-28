@@ -89,7 +89,7 @@ export function buildFacts(input: { port: string; date: string; engine: EngineRe
     },
     confidence: input.confidence, confidence_reason_from_code: input.confidenceReason,
     reports: input.reports,
-    allowed_numbers: [...allowedNumbers(engine, conditions, input.date, input.reports)].sort((a, b) => a - b),
+    allowed_numbers: [...allowedNumbers(engine, conditions, input.date, input.reports, [input.confidenceReason])].sort((a, b) => a - b),
   };
 }
 

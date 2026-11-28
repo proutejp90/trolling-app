@@ -106,6 +106,12 @@ describe("wind history", () => {
     expect(build(rows).wind_history[0]!.dir_deg % 360).toBe(0);
   });
 
+  it("does not apply this week's wind to a trip weeks away", () => {
+    const c = build(wind("Muskegon Buoy", "ndbc", 3.5, 48, 20), { date: "2026-08-20" });
+    expect(c.wind_history).toEqual([]);
+    expect(c.wind_station).toBeNull();
+  });
+
   it("says when there is too little wind history", () => {
     const c = build(wind("Muskegon Buoy", "ndbc", 3.5, 6, 20));
     expect(c.wind_history).toEqual([]);
