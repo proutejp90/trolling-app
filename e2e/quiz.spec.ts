@@ -4,6 +4,7 @@
  * so Muskegon's buoy last reported 20 minutes ago.
  */
 import { expect, test, type Page } from "@playwright/test";
+import pg from "pg";
 
 async function start(page: Page, date: string, port = "Muskegon") {
   await page.clock.setFixedTime(new Date("2026-10-14T14:00:00Z")); // the device clock matches the server's
@@ -417,6 +418,110 @@ test.describe("zones, chips and indicators", () => {
     await expect(page.getByText("Writing reasons…")).toHaveCount(0);
     await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
     await expect(page.getByText("Run the whole spread at")).toBeVisible();
+  });
+});
+
+test.describe("forecast panel", () => {
+  // One worker runs these in order: the rows seeded below are shared, and removed when the last one ends.
+  test.describe.configure({ mode: "serial" });
+  // Ludington gets a forecast, a marine forecast and an alert for the fixture day. No other test uses that port.
+  const headline = "Small Craft Advisory issued October 14 at 3:30AM EDT until October 14 at 7:00PM EDT by NWS Grand Rapids MI";
+  const marineText = "Pentwater to Manistee MI-\n.REST OF TODAY...Southwest winds 10 to 20 knots. Waves 1 to 3 feet.";
+  let db: pg.Client;
+  test.beforeAll(async () => {
+    db = new pg.Client({ connectionString: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/conditions" });
+    await db.connect();
+    const port = (await db.query("select id from public.ports where name = 'Ludington'")).rows[0].id;
+    const hours = Array.from({ length: 24 }, (_, h) => ({ valid_at: new Date(Date.UTC(2026, 9, 14, 4 + h)).toISOString(), sky: 20 + h, rain: h, air: 10 + h / 4, dir: 225, speed: 4 + h / 10 }));
+    await db.query(
+      `insert into public.forecasts (port_id, valid_at, fetched_at, sky_cover_pct, precip_pct, air_temp_c, wind_dir_deg, wind_speed_ms)
+       select $1, x.valid_at, $3, x.sky, x.rain, x.air, x.dir, x.speed from jsonb_to_recordset($2::jsonb) as x(valid_at timestamptz, sky numeric, rain numeric, air numeric, dir numeric, speed numeric)
+       on conflict (port_id, valid_at) do update set fetched_at = excluded.fetched_at, sky_cover_pct = excluded.sky_cover_pct, precip_pct = excluded.precip_pct, air_temp_c = excluded.air_temp_c, wind_dir_deg = excluded.wind_dir_deg, wind_speed_ms = excluded.wind_speed_ms`,
+      [port, JSON.stringify(hours), "2026-10-14T10:00:00Z"], // fetched four hours before the test clock: stale
+    );
+    const alert = { event: "Small Craft Advisory", headline, issued_at: "2026-10-14T03:30:00-04:00", starts_at: "2026-10-14T03:30:00-04:00", ends_at: "2026-10-14T19:00:00-04:00", url: "https://forecast.weather.gov/shmrn.php?mz=lmz849" };
+    await db.query(
+      `insert into public.marine_forecasts (port_id, zone, forecast_text, issued_at, text_fetched_at, alerts, alerts_fetched_at) values ($1, 'LMZ849', $2, $3, $3, $4, $5)
+       on conflict (port_id) do update set forecast_text = excluded.forecast_text, issued_at = excluded.issued_at, alerts = excluded.alerts, alerts_fetched_at = excluded.alerts_fetched_at`,
+      [port, marineText, "2026-10-14T13:06:00Z", JSON.stringify([alert]), "2026-10-14T13:55:00Z"],
+    );
+  });
+  test.afterAll(async () => {
+    await db.query("delete from public.forecasts where port_id = (select id from public.ports where name = 'Ludington')");
+    await db.query("delete from public.marine_forecasts where port_id = (select id from public.ports where name = 'Ludington')");
+    await db.end();
+  });
+
+  async function toResult(page: Page, date: string) {
+    await start(page, date, "Ludington");
+    await page.getByText("Daytime", { exact: true }).click();
+    // The forecast answers sky and wind, so they are not asked.
+    await expect(page.getByRole("group", { name: "Sky", exact: true })).toHaveCount(0);
+    await page.getByText("Clear", { exact: true }).click();
+    await page.getByText("I know the break", { exact: true }).click();
+    await page.getByLabel("Break depth, in feet").fill("60");
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+  }
+
+  test("G30: an active alert shows word for word on the result and on the panel, with its times and link", async ({ page }) => {
+    await toResult(page, "2026-10-14");
+    const banner = page.getByText(headline, { exact: true });
+    await expect(banner).toHaveCount(1);
+    expect((await banner.boundingBox())!.y).toBeLessThan((await page.getByRole("heading", { level: 1 }).boundingBox())!.y); // above everything else
+    await expect(page.getByText("Sky bright · forecast")).toBeVisible();
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await expect(page.getByText(headline, { exact: true })).toHaveCount(1);
+    await expect(page.getByText(/Issued Oct 14, 3:30 AM\. In effect until Oct 14, 7:00 PM\. National Weather Service\./)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Read the full text at weather.gov" })).toHaveAttribute("href", "https://forecast.weather.gov/shmrn.php?mz=lmz849");
+    // The alert carries no warning or danger color: it is not the app's place to rate the day.
+    const classes = await page.getByText(headline, { exact: true }).locator("xpath=..").getAttribute("class");
+    expect(classes).not.toMatch(/warning|danger|success/);
+  });
+
+  test("the panel shows the trip day by hour, the marine text as issued, and names its source", async ({ page }) => {
+    await toResult(page, "2026-10-14");
+    await page.getByRole("button", { name: "View conditions" }).click();
+    const forecast = page.locator("section", { has: page.getByRole("heading", { name: "Forecast", exact: true, level: 2 }) });
+    await expect(forecast.getByText(/National Weather Service\. Forecast fetched 4 hours ago\. Alerts checked 5 minutes ago\./)).toBeVisible();
+    await expect(forecast.getByText(/^Sunrise \d+:\d\d AM\. Sunset \d+:\d\d PM\.$/)).toBeVisible();
+    const rows = forecast.locator("tbody tr");
+    await expect(rows).toHaveCount(24);
+    await expect(rows.first()).toHaveText(/12 AM.*9 mph SW.*20% cloud.*0%.*50 °F/);
+    await expect(forecast.getByText("Southwest winds 10 to 20 knots. Waves 1 to 3 feet.", { exact: false })).toBeVisible();
+    await expect(forecast.getByText(/Nearshore marine forecast, issued Oct 14, 9:06 AM/)).toBeVisible();
+  });
+
+  test("G31: a forecast fetched four hours ago is marked stale with a link, and the result still renders", async ({ page }) => {
+    await toResult(page, "2026-10-14");
+    await page.getByRole("button", { name: "View conditions" }).click();
+    const forecast = page.locator("section", { has: page.getByRole("heading", { name: "Forecast", exact: true, level: 2 }) });
+    await expect(forecast.getByText("Stale", { exact: true })).toBeVisible();
+    await expect(forecast.getByRole("link", { name: "See the current forecast at weather.gov" })).toHaveAttribute("href", "https://forecast.weather.gov/shmrn.php?mz=lmz849");
+  });
+
+  test("G38: today's alert does not show on another day", async ({ page }) => {
+    await start(page, "2026-10-15", "Ludington");
+    for (const t of ["Daytime", "Clear", "I know the break"]) await page.getByText(t, { exact: true }).click();
+    await page.getByLabel("Break depth, in feet").fill("60");
+    // Tomorrow's own hours are not in the cache, so sky and wind are asked.
+    await page.getByText("Bright", { exact: true }).click();
+    await page.getByText("Breezy or more", { exact: true }).click();
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await expect(page.getByText("Run the whole spread at")).toBeVisible();
+    await expect(page.getByText(headline, { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await expect(page.getByText(headline, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/Nearshore marine forecast/)).toBeVisible(); // the text covers the coming days
+  });
+
+  test("G32: a port with no buoy waves and no forecast shows no wave value", async ({ page }) => {
+    await start(page, "2026-07-15");
+    await answer(page);
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await expect(page.getByText("No forecast covers that time.").first()).toBeVisible();
+    await expect(page.getByText(/Waves, observed/)).toHaveCount(0);
   });
 });
 

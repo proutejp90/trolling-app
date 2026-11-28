@@ -7,6 +7,7 @@ import type { EngineContext, Threshold } from "@recommender/engine";
 import type { Queryable } from "./db";
 import { distanceMi } from "../../seed/geo";
 import type { Wind48h } from "../lib/format";
+import { buildForecastPanel, type ForecastPanel, type MarineRow } from "./forecast-panel";
 import { sunTimes } from "./sun";
 import { cToF, msToMph, mToFt, round } from "./units";
 
@@ -53,21 +54,27 @@ export interface Conditions {
   hours_after_sunrise: number | null;
   sunrise: string | null;
   sunset: string | null;
+  /** The trip day's weather as the National Weather Service gave it, for the Conditions screen. */
+  forecast_panel: ForecastPanel;
   /** What the app does not know, in sentences an angler can read. */
   messages: string[];
   /** Latest reading per linked station, nearest first, for the Conditions screen. */
   readings: StationReading[];
 }
 
-export interface PortRow { id: string | null; name: string; shore: "east" | "west"; lat: number; lon: number }
+export interface PortRow { id: string | null; name: string; shore: "east" | "west"; lat: number; lon: number; time_zone?: string | null }
 export interface ObservationRow {
   station_name: string; source: string; distance_mi: number; rank: number; observed_at: Date;
   wind_dir_deg: number | null; wind_speed_ms: number | null; wave_height_m: number | null; air_temp_c: number | null; water_temp_c: number | null;
   temp_profile: { depth_m: number; temp_c: number }[] | null;
+  wave_period_s?: number | null;
   /** The station's own position. Rows without one are never merged. */
   lat?: number; lon?: number;
 }
-export interface ForecastRow { valid_at: Date; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_ms: number | null; hazards: { phenomenon: string; significance: string }[] }
+export interface ForecastRow {
+  valid_at: Date; sky_cover_pct: number | null; wind_dir_deg: number | null; wind_speed_ms: number | null; hazards: { phenomenon: string; significance: string }[];
+  fetched_at?: Date | null; precip_pct?: number | null; air_temp_c?: number | null;
+}
 
 const TIME_OFFSET: Record<TimeOfDay, { from: "sunrise" | "sunset"; hours: number; light: NonNullable<EngineContext["light_period"]> }> = {
   before_sunrise: { from: "sunrise", hours: -1, light: "before_sunrise" },
@@ -93,6 +100,8 @@ export function buildConditions(input: {
   observations: ObservationRow[]; forecasts: ForecastRow[]; thresholds: Threshold[]; connected: boolean;
   /** Buoys linked to the port within range, reporting or not. Defaults to those seen in the observations. */
   buoysInRange?: number;
+  /** The port's marine forecast text and alerts, when the cache has them. */
+  marine?: MarineRow | null;
 }): Conditions {
   const { port, date, timeOfDay, now, thresholds } = input;
   const messages: string[] = [];
@@ -235,7 +244,14 @@ export function buildConditions(input: {
   // In the dark, light is low whatever the cloud cover.
   if (light === "before_sunrise" || light === "after_sunset") sky = "low_light";
 
+  const forecastPanel = buildForecastPanel({
+    date, now, timeZone: port.time_zone ?? "America/Detroit", forecasts: input.forecasts, marine: input.marine ?? null,
+    waves: past.filter((o) => o.source !== "nws"),
+    limits: { forecastStaleHours: num(thresholds, "forecast_stale_hours", 3), alertsStaleMinutes: num(thresholds, "alerts_stale_minutes", 30), maxMiles, maxAgeHours, marineTextDays: 6 },
+  });
+
   return {
+    forecast_panel: forecastPanel,
     port, now: now.toISOString(), trip_time: tripTime?.toISOString() ?? null, temp_source_level: level,
     water_temp_surface_f: source?.water_temp_c == null ? null : round(cToF(source.water_temp_c)),
     temp_profile: level === 1 ? toFeet(source!.temp_profile) : null,
@@ -252,7 +268,7 @@ export function buildConditions(input: {
 export async function loadConditions(q: Queryable, port: PortRow, date: string, timeOfDay: TimeOfDay | null, now: Date, thresholds: Threshold[]): Promise<Conditions> {
   const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const obs = await q.query(
-    `select s.name as station_name, s.source, s.lat, s.lon, ps.distance_mi, ps.rank, o.observed_at, o.wind_dir_deg, o.wind_speed_ms, o.wave_height_m, o.air_temp_c, o.water_temp_c, o.temp_profile
+    `select s.name as station_name, s.source, s.lat, s.lon, ps.distance_mi, ps.rank, o.observed_at, o.wind_dir_deg, o.wind_speed_ms, o.wave_height_m, o.wave_period_s, o.air_temp_c, o.water_temp_c, o.temp_profile
      from public.port_stations ps
      join public.stations s on s.id = ps.station_id
      join public.observations o on o.station_id = s.id
@@ -265,12 +281,13 @@ export async function loadConditions(q: Queryable, port: PortRow, date: string, 
   );
   const noon = new Date(`${date}T17:00:00Z`);
   const fc = await q.query(
-    "select valid_at, sky_cover_pct, wind_dir_deg, wind_speed_ms, hazards from public.forecasts where port_id = $1 and valid_at between $2 and $3",
+    "select valid_at, fetched_at, sky_cover_pct, precip_pct, air_temp_c, wind_dir_deg, wind_speed_ms, hazards from public.forecasts where port_id = $1 and valid_at between $2 and $3",
     [port.id, new Date(noon.getTime() - 18 * 3_600_000), new Date(noon.getTime() + 18 * 3_600_000)],
   );
+  const zone = await q.query("select zone, forecast_text, issued_at, text_fetched_at, alerts, alerts_fetched_at from public.marine_forecasts where port_id = $1", [port.id]);
   return buildConditions({
-    port, date, timeOfDay, now, thresholds, connected: true, buoysInRange: linked.rows[0].n,
-    observations: obs.rows.map((r) => ({ ...r, lat: Number(r.lat), lon: Number(r.lon), distance_mi: Number(r.distance_mi), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms), wave_height_m: n(r.wave_height_m), air_temp_c: n(r.air_temp_c), water_temp_c: n(r.water_temp_c) })),
-    forecasts: fc.rows.map((r) => ({ ...r, sky_cover_pct: n(r.sky_cover_pct), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms) })),
+    port, date, timeOfDay, now, thresholds, connected: true, buoysInRange: linked.rows[0].n, marine: zone.rows[0] ?? null,
+    observations: obs.rows.map((r) => ({ ...r, lat: Number(r.lat), lon: Number(r.lon), distance_mi: Number(r.distance_mi), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms), wave_height_m: n(r.wave_height_m), wave_period_s: n(r.wave_period_s), air_temp_c: n(r.air_temp_c), water_temp_c: n(r.water_temp_c) })),
+    forecasts: fc.rows.map((r) => ({ ...r, precip_pct: n(r.precip_pct), air_temp_c: n(r.air_temp_c), sky_cover_pct: n(r.sky_cover_pct), wind_dir_deg: n(r.wind_dir_deg), wind_speed_ms: n(r.wind_speed_ms) })),
   });
 }

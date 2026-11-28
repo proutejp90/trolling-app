@@ -7,8 +7,9 @@ import { readFileSync } from "node:fs";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stations } from "../seed/stations";
+import { buildFacts } from "../src/server/agent/prompt";
 import { loadConditions } from "../src/server/conditions";
-import { refreshConditions, storeReadings } from "../src/server/jobs/refresh";
+import { refreshAlerts, refreshConditions, storeReadings } from "../src/server/jobs/refresh";
 import { recommend } from "../src/server/recommend";
 import { loadRuleset } from "../src/server/ruleset";
 import { parseSeagullObs } from "../src/server/sources/seagull";
@@ -18,7 +19,7 @@ const url = process.env.DATABASE_URL;
 
 describe.skipIf(!url)("live conditions from the cache", () => {
   let db: pg.Client;
-  const clear = () => db.query("truncate public.observations, public.forecasts, public.recommendations cascade");
+  const clear = () => db.query("truncate public.observations, public.forecasts, public.marine_forecasts, public.recommendations cascade");
   const refresh = (set: string, now: string) => { process.env.FIXTURES = `replay:${set}`; return refreshConditions(db, new Date(now)); };
 
   beforeAll(async () => { db = new pg.Client({ connectionString: url }); await db.connect(); });
@@ -109,6 +110,65 @@ describe.skipIf(!url)("live conditions from the cache", () => {
     // Late November is out of season: the engine says so and nothing is asked.
     const r = await recommend({ port: "Muskegon", date: "2026-11-28" }, { db, now: new Date(now) });
     expect(r).toMatchObject({ status: "out_of_season", questions: [] });
+  });
+
+  it("forecast panel: stores the zone, the marine text and the alert, and shows them for today only", async () => {
+    // The alert and marine forecast were recorded on the 28th, so the clock sits inside the alert's period.
+    const now = new Date("2026-11-28T17:00:00Z");
+    const summary = await refresh("november", now.toISOString());
+    expect(summary.errors).toEqual([]);
+    const zones = (await db.query("select name, marine_zone, time_zone from public.ports where active order by lat")).rows;
+    expect(zones.every((z) => /^LMZ\d{3}$/.test(z.marine_zone) && z.time_zone === "America/Detroit")).toBe(true);
+    expect(zones.find((z) => z.name === "Muskegon").marine_zone).toBe("LMZ847");
+
+    const ruleset = await loadRuleset(db);
+    const port = ruleset.ports.find((p) => p.name === "Muskegon")!;
+    const today = (await loadConditions(db, port, "2026-11-28", "day", now, ruleset.thresholds)).forecast_panel;
+    expect(today.alerts).toHaveLength(1);
+    expect(today.alerts[0]!.headline).toBe("Small Craft Advisory issued November 28 at 3:30AM EST until November 28 at 7:00PM EST by NWS Grand Rapids MI");
+    expect(today.alerts[0]).toMatchObject({ ends_at: "2026-11-28T19:00:00-05:00", url: "https://forecast.weather.gov/shmrn.php?mz=lmz847" });
+    expect(today.marine?.text).toContain("Grand Haven to Whitehall MI-");
+    expect(today.hours.length).toBeGreaterThan(12);
+    expect(today.hours.some((h) => h.precip_pct !== null) && today.hours.some((h) => h.air_temp_f !== null)).toBe(true);
+    expect(today).toMatchObject({ stale: false, alerts_stale: false, is_today: true });
+    // Every hour shown falls on the 28th at the port.
+    for (const h of today.hours) expect(new Date(h.valid_at).toLocaleDateString("en-CA", { timeZone: "America/Detroit" })).toBe("2026-11-28");
+
+    // Tomorrow keeps the marine text and the hours but not today's alert (G38).
+    const tomorrow = (await loadConditions(db, port, "2026-11-29", "day", now, ruleset.thresholds)).forecast_panel;
+    expect(tomorrow.alerts).toEqual([]);
+    expect(tomorrow.marine).not.toBeNull();
+    // Four hours on, with no new fetch, the panel says it is stale (G31).
+    const later = (await loadConditions(db, port, "2026-11-28", "day", new Date(now.getTime() + 4 * 3_600_000), ruleset.thresholds)).forecast_panel;
+    expect(later).toMatchObject({ stale: true, alerts_stale: true });
+
+    // G33 by construction: nothing about the alert or the marine forecast reaches the agent.
+    const c = await loadConditions(db, port, "2026-11-28", "day", now, ruleset.thresholds);
+    const rec = await recommend({ port: "Muskegon", date: "2026-07-15", time_of_day: "day", answers: { clarity: "clear", sky: "bright", wind: "breezy" } }, { db, now });
+    const facts = JSON.stringify(buildFacts({ port: "Muskegon", date: "2026-11-28", engine: rec.engine, conditions: c, confidence: "low", confidenceReason: "x", depthSource: "month defaults", reports: [] }));
+    expect(facts).not.toMatch(/small craft|advisory|knots|LMZ/i);
+  });
+
+  it("alerts refresh on their own between full refreshes", async () => {
+    const now = new Date("2026-11-28T17:00:00Z");
+    await refresh("november", now.toISOString());
+    await db.query("update public.marine_forecasts set alerts = '[]', alerts_fetched_at = null");
+    process.env.FIXTURES = "replay:november";
+    const result = await refreshAlerts(db, new Date(now.getTime() + 15 * 60_000));
+    expect(result.errors).toEqual([]);
+    expect(result.zones).toBeGreaterThanOrEqual(5);
+    const row = (await db.query("select m.alerts, m.forecast_text from public.marine_forecasts m join public.ports p on p.id = m.port_id where p.name = 'Muskegon'")).rows[0];
+    expect(row.alerts).toHaveLength(1);
+    expect(row.forecast_text).toContain("Grand Haven to Whitehall"); // the text from the full refresh is left alone
+  });
+
+  it("winter fixtures: no alert and no marine text, and the panel says nothing it does not have", async () => {
+    const now = new Date("2026-04-10T14:00:00Z");
+    const summary = await refresh("winter", now.toISOString());
+    expect(summary.errors).toEqual([]);
+    const ruleset = await loadRuleset(db);
+    const panel = (await loadConditions(db, ruleset.ports.find((p) => p.name === "Muskegon")!, "2026-04-10", "day", now, ruleset.thresholds)).forecast_panel;
+    expect(panel).toMatchObject({ alerts: [], marine: null, observed_waves: null });
   });
 
   it("asks only what the data could not answer", async () => {

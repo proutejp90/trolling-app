@@ -57,4 +57,8 @@ export const thresholds: Threshold[] = [
   // Reading the forecast
   t("sky_overcast_min_pct", 70, "%", "Forecast sky cover at or above this counts as overcast; below it, bright.", true),
   t("wind_calm_max_mph", 6, "mph", "Forecast wind at or below this counts as calm for P07.", true),
+
+  // The forecast panel
+  t("forecast_stale_hours", 3, "h", "A forecast fetched longer ago than this is marked stale on the forecast panel."),
+  t("alerts_stale_minutes", 30, "min", "Alerts fetched longer ago than this are marked stale on the forecast panel."),
 ];

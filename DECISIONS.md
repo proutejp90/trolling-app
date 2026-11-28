@@ -239,6 +239,35 @@ Where the doc's own parts pull against each other, and what was chosen:
 - **Zone labels** are `h2` in `micro`; card titles under them are `h3`. On the questions screen the three cards are the zones, so their titles are `h2` at `title-3`.
 - **Screenshots** are in `docs/ui-review/part-e`, made by `scripts/screenshots.mjs` on the autumn fixtures. Contrast is checked by `scripts/contrast.mjs`.
 
+## Build spec, second version: forecast panel
+
+The spec in `docs/BUILD-SPEC.md` replaces the one this build started from. It adds the forecast panel, the lake model, day selection and prefilled conditions. This section covers the forecast panel, built first because it needs no new data source.
+
+### What the spec asked to be confirmed (checked live 2026-11-28)
+
+- **A port's marine zone** is `forecastZone` in the `/points` answer for the port's own position, such as `LMZ847` for Muskegon. The job stores it in `ports.marine_zone`, with the port's time zone from the same answer. The ten seeded ports fall in seven zones across two offices (GRR and APX).
+- **Zone alerts** come from `/alerts/active?zone={zone}`.
+- **The marine zone forecast has no API route.** `/zones/forecast/{zone}/forecast` answers 404 for marine zones. The text comes from the Nearshore Marine Forecast product: `/products/types/NSH/locations/{office}` lists them newest first and `/products/{id}` holds the text, one section per zone. The section is stored word for word.
+- **NWS gridpoint data does carry wave height for Lake Michigan**, but not at the port itself. At Muskegon's own grid cell `waveHeight` is a single zero for the week. At a cell about four miles offshore it is populated (metres, with period and direction). So the simpler path the spec asks to check first looks usable for forecast waves at the offshore sample points. That work belongs with the sample points in Phase 2b and is not built here; the GRIB2 wave model may not be needed.
+
+### Choices
+
+- **Marine text and alerts sit in their own table, `marine_forecasts`, one row per port**, not on the hourly `forecasts` rows as the spec's table lists them. They cover a zone and several days, not one hour.
+- **Alerts refresh every 15 minutes** through `/api/jobs/alerts` and a second scheduled function at :15 and :45. The half-hourly full refresh fetches them too.
+- **The alert link** is the zone's page, `https://forecast.weather.gov/shmrn.php?mz={zone}`, where the alert and forecast can be read in full. This build session cannot reach that host, so the link format is **unverified**; the owner should open one.
+- **An alert shows only on today, and only until it ends.** The trip date is compared with today at the port, in the port's time zone.
+- **The alert box uses a neutral surface and border**, not the warning or danger colors, since the spec rules out any color that implies safe or unsafe.
+- **Marine text shows for today through six days ahead**, the span the product covers, and never for a past date.
+- **Observed waves show for today only**, from the nearest in-range buoy that reports wave height, with its period when the station gives one (`observations.wave_period_s`, from NDBC's `DPD`). No forecast wave value exists in the panel until Phase 2b, so there is nothing to fill with a guess.
+- **The marine text is reflowed for a phone.** The product is typed in 69-column lines. Line breaks inside a paragraph are removed; no word is changed, and a test checks that.
+- **Staleness limits are thresholds**: `forecast_stale_hours` (3) and `alerts_stale_minutes` (30).
+- **The agent is given nothing from the panel.** The facts it receives hold no alert, marine text or hazard, and a test checks that (G33 by construction).
+- **Fixtures.** The alert and marine forecast were recorded on 2026-11-28, a day after the rest of the `november` set. The `autumn` and `winter` sets hold the empty answers the API gives when nothing is active.
+
+### Not changed yet, though the new spec changes them
+
+These wait for the day-selection and prefilled-conditions work: the time windows (now, first light, morning, midday, evening), the calm limit in knots, the 30% bright cutoff, the five-day forecast horizon, the today-first Home screen, and the confidence rule that lets a fresh buoy profile alone reach High. The owner's earlier rule decisions (R20, chartreuse in R11, `upwelling_shift_ft` of 15) stay in force; the new spec's text does not include them.
+
 ## Still open for later phases
 
 - Whether the DNR site's terms and robots rules permit a weekly automated fetch; otherwise a paste-in flow for the owner (Phase 4).

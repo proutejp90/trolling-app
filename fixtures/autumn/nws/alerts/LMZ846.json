@@ -1,0 +1,1 @@
+{"url":"https://api.weather.gov/alerts/active?zone=LMZ846","recorded_at":"2026-11-28T14:50:34.102Z","note":"No alert on record for this clock: the empty collection the API gives when none is active.","status":200,"body":"{\"features\":[]}"}

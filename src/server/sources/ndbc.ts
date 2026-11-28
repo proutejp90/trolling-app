@@ -14,7 +14,7 @@ export function parseNdbc(text: string): Reading[] {
   if (!header) return [];
   const cols = header.replace(/^#/, "").trim().split(/\s+/);
   const at = (name: string) => cols.indexOf(name);
-  const idx = { y: at("YY"), mo: at("MM"), d: at("DD"), h: at("hh"), mi: at("mm"), wdir: at("WDIR"), wspd: at("WSPD"), wvht: at("WVHT"), atmp: at("ATMP"), wtmp: at("WTMP") };
+  const idx = { y: at("YY"), mo: at("MM"), d: at("DD"), h: at("hh"), mi: at("mm"), wdir: at("WDIR"), wspd: at("WSPD"), wvht: at("WVHT"), dpd: at("DPD"), atmp: at("ATMP"), wtmp: at("WTMP") };
   if (idx.y < 0 || idx.h < 0) return [];
   const num = (parts: string[], i: number) => {
     if (i < 0) return null;
@@ -30,7 +30,7 @@ export function parseNdbc(text: string): Reading[] {
     if (Number.isNaN(when.getTime())) continue;
     out.push({
       ...emptyReading(when),
-      wind_dir_deg: num(p, idx.wdir), wind_speed_ms: num(p, idx.wspd), wave_height_m: num(p, idx.wvht),
+      wind_dir_deg: num(p, idx.wdir), wind_speed_ms: num(p, idx.wspd), wave_height_m: num(p, idx.wvht), wave_period_s: num(p, idx.dpd),
       air_temp_c: num(p, idx.atmp), water_temp_c: num(p, idx.wtmp),
     });
   }

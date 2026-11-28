@@ -4,6 +4,8 @@ export interface Reading {
   wind_dir_deg: number | null;
   wind_speed_ms: number | null;
   wave_height_m: number | null;
+  /** Dominant wave period, where the station reports one. */
+  wave_period_s?: number | null;
   air_temp_c: number | null;
   water_temp_c: number | null;
   temp_profile: { depth_m: number; temp_c: number }[] | null;
