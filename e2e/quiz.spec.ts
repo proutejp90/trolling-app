@@ -256,6 +256,48 @@ test.describe("recommendation screen", () => {
 });
 const dateFieldOf = (page: Page) => page.getByLabel("Date");
 
+test.describe("conditions screen", () => {
+  async function conditions(page: Page, date: string) {
+    await start(page, date);
+    await answer(page);
+    await page.getByText("I know the break", { exact: true }).click();
+    await page.getByLabel("Break depth, in feet").fill("60");
+    await page.getByRole("button", { name: "Show setup" }).click();
+    await page.getByRole("button", { name: "View conditions" }).click();
+    await expect(page.getByRole("heading", { name: "Conditions at Muskegon" })).toBeVisible();
+  }
+  const miles = async (rows: import("@playwright/test").Locator) =>
+    (await rows.allTextContents()).map((t) => Number(/([\d.]+) mi/.exec(t)![1]));
+
+  test("lists the stations in range openly and the rest behind a closed row", async ({ page }) => {
+    await conditions(page, "2026-10-14");
+    const stations = page.locator("section", { has: page.getByRole("heading", { name: "Stations" }) });
+    const open = stations.locator(":scope > ul > li"), farther = stations.locator("details");
+    const near = await miles(open);
+    expect(near.length).toBeGreaterThan(0);
+    for (const d of near) expect(d).toBeLessThanOrEqual(25);
+    expect(new Set(near).size).toBe(near.length); // no place is listed twice
+    await expect(farther.locator("summary")).toHaveText("Farther stations, not used");
+    expect(await farther.evaluate((d) => (d as HTMLDetailsElement).open)).toBe(false);
+    await farther.locator("summary").click();
+    const far = await miles(farther.locator("li"));
+    expect(far.length).toBeGreaterThan(0);
+    for (const d of far) expect(d).toBeGreaterThan(25);
+    // Each row names where its numbers came from.
+    await expect(open.first()).toContainText(/NDBC|GLOS|NWS/);
+  });
+
+  test("the wind line counts the hours, and says when the trip is too far off to use them", async ({ page }) => {
+    await conditions(page, "2026-10-14");
+    await expect(page.getByText(/: \d+ of \d+ hours from the north or east\.$/)).toBeVisible();
+    await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "Back" }).click();
+    await conditions(page, "2026-07-15");
+    await expect(page.getByText(/hours from the north or east\. Not used for this trip: it is \d+ days away\.$/)).toBeVisible();
+  });
+});
+
 test.describe("home", () => {
   const dateField = (page: Page) => page.getByLabel("Date");
   const portOrder = (page: Page) => page.getByLabel("Port").locator("option").allTextContents();

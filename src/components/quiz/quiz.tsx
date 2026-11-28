@@ -8,6 +8,7 @@ import type { QuestionField, Recommendation } from "@/server/recommend";
 import { Badge, CONFIDENCE, EVIDENCE_TAGS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Choice } from "@/components/ui/choice";
+import { ago, windHistoryLine } from "@/lib/format";
 import { checkDate, defaultDate, nearestFirst, nextSeasonStart, type PortOption } from "@/lib/home";
 import { caveatsToShow, depthSourceLine, FOOTER, KNOWN_LIMITS, TAG_EXPLAINER, TYPE_NAME } from "@/lib/reasons";
 import type { Explanation, Reason } from "@/server/agent/schema";
@@ -20,7 +21,6 @@ type Sky = "bright" | "overcast" | "low_light";
 const QUESTION_NAME: Record<QuestionField, string> = { time_of_day: "Time on the water", clarity: "Water clarity", sky: "Sky", wind: "Wind", mode: "Where are you fishing", depth: "Depth" };
 const COMPASS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
 const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8]!;
-const ago = (minutes: number) => (minutes < 60 ? `${minutes} minutes ago` : minutes < 36 * 60 ? `${Math.round(minutes / 60)} hours ago` : `${Math.round(minutes / 1440)} days ago`);
 
 const feet = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min} ft down` : `${r.min} to ${r.max} ft down`);
 const mph = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min.toFixed(1)} mph` : `${r.min.toFixed(1)} to ${r.max.toFixed(1)} mph`);
@@ -212,9 +212,42 @@ function Result({ rec, explanation, portName, date, modeAnswered, onConditions, 
   );
 }
 
+function StationRow({ r }: { r: Conditions["readings"][number] }) {
+  return (
+    <li className="border-b border-border-subtle py-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-medium">{r.station}</span>
+        <span className="shrink-0 text-small text-fg-tertiary">{r.distance_mi} mi</span>
+      </div>
+      <p className="text-small text-fg-tertiary">{ago(r.age_minutes)}{r.age_minutes > 360 ? ", more than 6 hours old" : ""} · {r.sources.join(", ")}</p>
+      <p className="mt-1 text-fg-secondary tabular-nums">
+        {[
+          r.water_temp_f !== null ? `Water ${r.water_temp_f} °F` : null,
+          r.wind_speed_mph !== null ? `Wind ${r.wind_speed_mph} mph${r.wind_dir_deg !== null ? ` from the ${compass(r.wind_dir_deg)}` : ""}` : null,
+          r.wave_height_ft !== null ? `Waves ${r.wave_height_ft} ft` : null,
+          r.air_temp_f !== null ? `Air ${r.air_temp_f} °F` : null,
+        ].filter(Boolean).join(". ") || "No readings the app uses."}
+      </p>
+      {r.temp_profile && r.temp_profile.length >= 3 ? (
+        <table className="mt-2 w-full text-small tabular-nums text-fg-secondary">
+          <caption className="pb-1 text-left text-fg-tertiary">Temperature at depth</caption>
+          <tbody>
+            {r.temp_profile.map((p) => (
+              <tr key={p.depth_ft} className="border-t border-border-subtle">
+                <th scope="row" className="py-1 text-left font-normal">{p.depth_ft} ft</th>
+                <td className="py-1 text-right">{p.temp_f} °F</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </li>
+  );
+}
+
 /** The raw inputs: what each station last reported and how old it is. */
 function ConditionsView({ c }: { c: Conditions }) {
-  const north = c.wind_history.filter((w) => w.dir_deg >= 315 || w.dir_deg <= 135).length;
+  const near = c.readings.filter((r) => r.in_range), far = c.readings.filter((r) => !r.in_range);
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-t2" tabIndex={-1} data-screen-heading>Conditions at {c.port.name}</h1>
@@ -226,44 +259,24 @@ function ConditionsView({ c }: { c: Conditions }) {
       <section>
         <h2 className="text-t3">Stations</h2>
         {c.readings.length === 0 ? <p className="mt-2 text-fg-secondary">No station linked to this port has reported in the last three days.</p> : (
-          <ul className="mt-2 border-t border-border-subtle">
-            {c.readings.map((r) => (
-              <li key={`${r.source}/${r.station}`} className="border-b border-border-subtle py-3">
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="font-medium">{r.station}</span>
-                  <span className="shrink-0 text-small text-fg-tertiary">{r.distance_mi} mi</span>
-                </div>
-                <p className="text-small text-fg-tertiary">{ago(r.age_minutes)}{r.age_minutes > 360 ? ", more than 6 hours old" : ""}</p>
-                <p className="mt-1 text-fg-secondary tabular-nums">
-                  {[
-                    r.water_temp_f !== null ? `Water ${r.water_temp_f} °F` : null,
-                    r.wind_speed_mph !== null ? `Wind ${r.wind_speed_mph} mph${r.wind_dir_deg !== null ? ` from the ${compass(r.wind_dir_deg)}` : ""}` : null,
-                    r.wave_height_ft !== null ? `Waves ${r.wave_height_ft} ft` : null,
-                    r.air_temp_f !== null ? `Air ${r.air_temp_f} °F` : null,
-                  ].filter(Boolean).join(". ") || "No readings the app uses."}
-                </p>
-                {r.temp_profile && r.temp_profile.length >= 3 ? (
-                  <table className="mt-2 w-full text-small tabular-nums text-fg-secondary">
-                    <caption className="pb-1 text-left text-fg-tertiary">Temperature at depth</caption>
-                    <tbody>
-                      {r.temp_profile.map((p) => (
-                        <tr key={p.depth_ft} className="border-t border-border-subtle">
-                          <th scope="row" className="py-1 text-left font-normal">{p.depth_ft} ft</th>
-                          <td className="py-1 text-right">{p.temp_f} °F</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <>
+            {near.length ? <ul className="mt-2 border-t border-border-subtle">{near.map((r) => <StationRow key={`${r.source}/${r.station}`} r={r} />)}</ul> : <p className="mt-2 text-fg-secondary">No station within range has reported in the last three days.</p>}
+            {far.length ? (
+              <details>
+                <summary className="flex min-h-touch cursor-pointer list-none items-center gap-2 rounded-sm text-fg [&::-webkit-details-marker]:hidden">
+                  <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" className="chevron shrink-0 text-fg-tertiary transition-transform duration-150" />
+                  Farther stations, not used
+                </summary>
+                <ul className="border-t border-border-subtle">{far.map((r) => <StationRow key={`${r.source}/${r.station}`} r={r} />)}</ul>
+              </details>
+            ) : null}
+          </>
         )}
       </section>
       <section>
         <h2 className="text-t3">Wind, last 48 hours</h2>
         <p className="mt-2 text-fg-secondary">
-          {c.wind_history.length ? `${c.wind_station}: ${north} of ${c.wind_history.length} hours from the north or east.` : "Too little wind history to say."}
+          {windHistoryLine(c.wind_48h, c.days_to_trip)}
         </p>
       </section>
       <section>

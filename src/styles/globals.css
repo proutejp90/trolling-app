@@ -33,6 +33,11 @@ html {
   outline: none;
 }
 
+/* A disclosure chevron that turns when its section is open, where no React state tracks it. */
+details[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+
 /* A question added after the form first rendered. The reduced-motion rule below removes it. */
 @keyframes fade-in {
   from { opacity: 0; }
